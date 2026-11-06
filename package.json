@@ -1,0 +1,15 @@
+{
+  "name": "pov-exchange",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A live POV library and knowledge graph.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "serve": "node scripts/serve.mjs --prefix /POV_Exchange",
+    "check": "node scripts/build.mjs --check"
+  }
+}
