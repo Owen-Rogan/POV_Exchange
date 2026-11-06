@@ -10,6 +10,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "serve": "node scripts/serve.mjs --prefix /POV_Exchange",
-    "check": "node scripts/build.mjs --check"
+    "check": "node scripts/build.mjs --check",
+    "test": "node --test scripts/test.mjs"
   }
 }

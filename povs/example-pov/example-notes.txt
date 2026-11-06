@@ -1,0 +1,5 @@
+Example attachment (fictional).
+
+This text file stands in for a PDF, deck or spreadsheet. Documents listed under
+"documents:" in pov.md are copied to the site and shown as download links on
+the POV page. Replace or delete this file along with the example POV.

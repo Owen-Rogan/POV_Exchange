@@ -1,0 +1,27 @@
+[
+  {
+    "id": "ai-strategy",
+    "title": "AI strategy",
+    "view": "PLACEHOLDER: replace with the practice's house view on this topic (one or two sentences)."
+  },
+  {
+    "id": "agents",
+    "title": "Agents",
+    "view": "PLACEHOLDER: replace with the practice's house view on this topic (one or two sentences).",
+    "parent": "ai-strategy",
+    "related": ["governance"]
+  },
+  {
+    "id": "governance",
+    "title": "Governance and risk",
+    "view": "PLACEHOLDER: replace with the practice's house view on this topic (one or two sentences).",
+    "parent": "ai-strategy"
+  },
+  {
+    "id": "data-foundations",
+    "title": "Data foundations",
+    "view": "PLACEHOLDER: replace with the practice's house view on this topic (one or two sentences).",
+    "parent": "ai-strategy",
+    "related": ["agents"]
+  }
+]

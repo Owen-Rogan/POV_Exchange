@@ -17,7 +17,10 @@ povs/<slug>/*.pdf ...   optional documents beside it
 povs/_template/         skipped by the build (folders starting "_")
 site/                   front end (committed; vendor/ holds three.js)
 scripts/build.mjs       validate + build -> dist/
+scripts/lib/            front matter, markdown, text rules, graph layout
+scripts/test.mjs        build tests (node --test scripts/test.mjs)
 scripts/serve.mjs       local preview, 127.0.0.1 only
+CONTRIBUTING.md         how to add a POV
 .github/workflows/      pages.yml
 dist/                   generated, git-ignored, deployed by the Action
 ```
@@ -27,6 +30,7 @@ dist/                   generated, git-ignored, deployed by the Action
 ```
 node scripts/build.mjs                       # build into dist/
 node scripts/build.mjs --check               # validate only
+node --test scripts/test.mjs                 # run the build tests
 node scripts/serve.mjs --prefix /POV_Exchange  # http://127.0.0.1:8080/POV_Exchange/
 ```
 

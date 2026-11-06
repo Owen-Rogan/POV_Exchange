@@ -3,17 +3,28 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'">
   <title>POV Exchange</title>
   <meta name="description" content="A live library of our point of view on AI topics.">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="POV Exchange">
+  <meta property="og:description" content="A live library of our point of view on AI topics.">
   <meta name="color-scheme" content="light dark">
+  <link rel="icon" href="data:,">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <main class="skeleton">
-    <p class="eyebrow">Skeleton</p>
-    <h1>POV Exchange</h1>
-    <p class="lede">A live library of our point of view on AI topics. The knowledge graph is on its way.</p>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="bar"><a class="brand" href="./">POV Exchange</a></header>
+  <main id="main" class="page">
+    <section class="intro">
+      <p class="eyebrow">Point of view library</p>
+      <h1>POV Exchange</h1>
+      <p class="lede">A live library of our point of view on AI topics. Short takes and longer papers, with the documents behind them.</p>
+    </section>
+    <!-- build:content -->
   </main>
-  <noscript><p class="noscript">This page works without JavaScript.</p></noscript>
+  <footer class="foot"><p>Practice opinions only. No client information.</p></footer>
+  <noscript><p class="noscript">This site works without JavaScript.</p></noscript>
 </body>
 </html>
