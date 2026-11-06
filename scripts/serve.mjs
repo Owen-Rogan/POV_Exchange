@@ -12,12 +12,14 @@ import { dirname, extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const distDir = join(root, 'dist');
 
 function arg(name, fallback) {
   const i = process.argv.indexOf(name);
   return i !== -1 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
 }
+
+// --dir lets you preview another build output (for example a test fixture).
+const distDir = resolve(arg('--dir', join(root, 'dist')));
 
 const prefix = arg('--prefix', '').replace(/\/+$/, '');
 const port = Number(arg('--port', '8080'));

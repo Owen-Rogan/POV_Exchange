@@ -252,14 +252,145 @@ fails('invalid topics.json', () => {
   return root;
 }, /is not valid JSON/);
 
-fails('site/index.html without the content marker', () => {
+fails('site/index.html without the sections marker', () => {
   const root = fixture({ p: pov() });
   writeFileSync(join(root, 'site/index.html'), '<html></html>');
   return root;
-}, /must contain the <!-- build:content --> marker/);
+}, /must contain the <!-- build:sections --> marker/);
 
 test('a failed build leaves no dist/ behind from this run', () => {
   const root = fixture({ p: pov('x', { topics: '[nope]' }) });
   assert.equal(run(root).code, 1);
   assert.throws(() => readFileSync(join(root, 'dist/index.html')));
+});
+
+// ------------------------------------------------------------- phase 3 pages
+
+function built(povs) {
+  const root = fixture(povs);
+  const r = run(root);
+  assert.equal(r.code, 0, r.all);
+  return { root, read: (rel) => readFileSync(join(root, 'dist', rel), 'utf8') };
+}
+
+const TWO = () => ({
+  alpha: pov('Alpha body.', { topics: '[agents]', related: '[beta]', title: 'Alpha POV' }),
+  beta: pov('Beta body.', { topics: '[agents, governance]', title: 'Beta POV', date: '2026-10-01' }),
+});
+
+test('every generated page carries the strict CSP and no inline script or style', () => {
+  const { read } = built(TWO());
+  for (const page of ['index.html', '404.html', 'add/index.html', 'pov/alpha/index.html']) {
+    const html = read(page);
+    assert.match(html, /Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'/, page);
+    assert.ok(!/ style="|<style|onclick=|onload=|<script>[^<]/i.test(html), `${page} has inline code`);
+    assert.ok(!html.includes('<!-- build:'), `${page} has an unexpanded marker`);
+  }
+});
+
+test('asset paths are relative at every depth, and absolute only on 404.html', () => {
+  const { read } = built(TWO());
+  assert.match(read('index.html'), /href="styles\.css"/);
+  assert.match(read('add/index.html'), /href="\.\.\/styles\.css"/);
+  assert.match(read('pov/alpha/index.html'), /href="\.\.\/\.\.\/styles\.css"/);
+  assert.match(read('404.html'), /href="\/POV_Exchange\/styles\.css"/);
+});
+
+test('the home page has a poster svg, the list view, and a card per POV', () => {
+  const { read } = built(TWO());
+  const home = read('index.html');
+  assert.match(home, /<svg class="poster-svg"[^>]*aria-hidden="true"/);
+  assert.equal((home.match(/class="card reveal"/g) ?? []).length, 3); // alpha under 1 topic, beta under 2
+  assert.match(home, /id="nodelist"/);
+  assert.match(home, /<noscript>/);
+  assert.match(home, /2 POVs &middot; 2 topics &middot; 0 documents/);
+});
+
+test('a POV page has a where-this-sits map with links, and related links', () => {
+  const { read } = built(TWO());
+  const page = read('pov/alpha/index.html');
+  assert.match(page, /<svg class="minimap-svg"[^>]*role="group"/);
+  assert.match(page, /<a href="\.\.\/beta\/"><title>Beta POV<\/title>/);
+  assert.match(page, /<a href="\.\.\/\.\.\/#topic-agents">/);
+  assert.match(page, /<h2 id="rel-h">Related<\/h2>/);
+  assert.match(page, /min read/);
+});
+
+test('graph.json has finite positions, the newest POV, and only real edge ends', () => {
+  const { read } = built(TWO());
+  const g = JSON.parse(read('data/graph.json'));
+  assert.equal(g.newest, 'alpha');
+  const ids = new Set(g.nodes.map((n) => n.id));
+  for (const n of g.nodes) for (const k of ['x', 'y', 'z']) assert.ok(Number.isFinite(n[k]), `${n.id}.${k}`);
+  for (const e of g.edges) assert.ok(ids.has(e.s) && ids.has(e.t), `${e.s} -> ${e.t}`);
+  assert.ok(g.edges.some((e) => e.k === 'parent' || e.k === 'topic' || e.k === 'link'));
+});
+
+test('a title with markup characters cannot break out of the svg map', () => {
+  const evil = 'A "quoted" <b>bold</b> & title';
+  const root = fixture({ x: pov('Body.', { title: `'${evil}'`.replace(/<b>|<\/b>/g, '') }) });
+  assert.equal(run(root).code, 0);
+  const html = readFileSync(join(root, 'dist/pov/x/index.html'), 'utf8');
+  assert.ok(!/<svg[\s\S]*?"quoted"[\s\S]*?<\/svg>/.test(html), 'raw quotes reached the svg');
+  assert.match(html, /&quot;quoted&quot;/);
+});
+
+test('shared validation modules are copied for the Add page, and the add page links its data', () => {
+  const { read } = built(TWO());
+  for (const m of ['frontmatter', 'markdown', 'rules']) assert.match(read(`js/shared/${m}.js`), /^\/\/ /, m);
+  assert.match(read('add/index.html'), /data-repo="Owen-Rogan\/POV_Exchange"/);
+});
+
+test('the real site: vendored three.js and fonts are present and unmodified in dist', () => {
+  const root = fixture({ p: pov() });
+  run(root);
+  const a = readFileSync(join(repo, 'site/vendor/three/three.module.js'));
+  const b = readFileSync(join(root, 'dist/vendor/three/three.module.js'));
+  assert.ok(a.equals(b));
+  assert.ok(readFileSync(join(root, 'dist/fonts/ibm-plex-sans-latin-400-normal.woff2')).length > 10000);
+});
+
+// ---------------------------------------------------- browser source rules
+
+import { readdirSync } from 'node:fs';
+
+const browserFiles = readdirSync(join(repo, 'site/js')).filter((f) => f.endsWith('.js')).map((f) => join(repo, 'site/js', f));
+
+test('browser code never uses innerHTML, outerHTML, insertAdjacentHTML, eval or document.write', () => {
+  const bad = /\.innerHTML|\.outerHTML|insertAdjacentHTML|\beval\s*\(|new Function\s*\(|document\.write/;
+  for (const file of browserFiles) {
+    const code = readFileSync(file, 'utf8').split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+    assert.ok(!bad.test(code), `${file} uses an unsafe API`);
+  }
+});
+
+test('browser code only fetches same-site data and never contacts another host', () => {
+  for (const file of browserFiles) {
+    const code = readFileSync(file, 'utf8');
+    for (const m of code.matchAll(/fetch\(\s*['"`]([^'"`]+)['"`]/g)) assert.ok(!/^[a-z]+:/i.test(m[1]) && !m[1].startsWith('//'), `${file} fetches ${m[1]}`);
+    assert.ok(!/XMLHttpRequest|WebSocket|sendBeacon|EventSource/.test(code), `${file} opens a network channel`);
+  }
+});
+
+test('browser code is plain ASCII, so no invisible characters can hide in it', () => {
+  for (const file of [...browserFiles, ...readdirSync(join(repo, 'scripts')).filter((f) => f.endsWith('.mjs')).map((f) => join(repo, 'scripts', f)),
+    ...readdirSync(join(repo, 'scripts/lib')).map((f) => join(repo, 'scripts/lib', f))]) {
+    const text = readFileSync(file, 'utf8');
+    assert.ok(![...text].some((c) => c.charCodeAt(0) > 127), `${file} has a non-ASCII character`);
+  }
+});
+
+test('every ES import in the browser code resolves to a file that exists', () => {
+  const base = join(repo, 'site/js');
+  const seen = [];
+  for (const file of browserFiles) {
+    const code = readFileSync(file, 'utf8');
+    for (const m of code.matchAll(/(?:from|import\()\s*['"](\.[^'"]+)['"]/g)) {
+      const target = resolve(dirname(file), m[1]);
+      seen.push(m[1]);
+      if (target.includes(join('js', 'shared'))) continue; // generated into dist/ by the build
+      try { readFileSync(target); } catch { assert.fail(`${file} imports ${m[1]}, which does not exist`); }
+    }
+  }
+  assert.ok(seen.length > 15);
 });

@@ -1,30 +1,40 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'">
-  <title>POV Exchange</title>
-  <meta name="description" content="A live library of our point of view on AI topics.">
-  <meta property="og:type" content="website">
-  <meta property="og:title" content="POV Exchange">
-  <meta property="og:description" content="A live library of our point of view on AI topics.">
-  <meta name="color-scheme" content="light dark">
-  <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="styles.css">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>POV Exchange</title>
+<meta name="description" content="A live library of our point of view on AI topics, explorable as a knowledge graph.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="POV Exchange">
+<meta property="og:description" content="A live library of our point of view on AI topics, explorable as a knowledge graph.">
+<!-- build:head up= -->
 </head>
 <body>
-  <a class="skip" href="#main">Skip to content</a>
-  <header class="bar"><a class="brand" href="./">POV Exchange</a></header>
-  <main id="main" class="page">
-    <section class="intro">
-      <p class="eyebrow">Point of view library</p>
-      <h1>POV Exchange</h1>
-      <p class="lede">A live library of our point of view on AI topics. Short takes and longer papers, with the documents behind them.</p>
-    </section>
-    <!-- build:content -->
-  </main>
-  <footer class="foot"><p>Practice opinions only. No client information.</p></footer>
-  <noscript><p class="noscript">This site works without JavaScript.</p></noscript>
+<!-- build:header up= current=explore -->
+<main id="main">
+<section class="hero" id="hero" data-tier="static" aria-labelledby="hero-h">
+<div class="hero-stage" data-hero-stage>
+<div class="poster"><!-- build:poster --></div>
+</div>
+<div class="hero-copy">
+<p class="eyebrow">Point of view library</p>
+<h1 id="hero-h" class="kin"><span class="w">POV</span> <span class="w">Exchange</span></h1>
+<p class="lede">What we think about AI, in short takes and longer papers, with the documents behind them. Explore the graph or browse the topics below.</p>
+<p class="hero-stats"><!-- build:stats --></p>
+<p class="hero-cta"><a class="btn" href="#explore">Browse POVs</a> <a class="btn ghost" href="#list">Browse as a list</a></p>
+</div>
+</section>
+<!-- build:filters -->
+<div class="page home">
+<!-- build:sections -->
+<details class="listview" id="list">
+<summary>Browse the graph as a list</summary>
+<!-- build:nodelist -->
+</details>
+</div>
+</main>
+<!-- build:footer -->
+<noscript><p class="noscript">The animated graph needs JavaScript. Everything else on this site works without it.</p></noscript>
 </body>
 </html>

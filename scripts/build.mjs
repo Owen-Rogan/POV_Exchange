@@ -24,6 +24,10 @@ import { fileURLToPath } from 'node:url';
 import { normalise, splitFrontMatter } from './lib/frontmatter.mjs';
 import { computeLayout } from './lib/layout.mjs';
 import { parseBlocks } from './lib/markdown.mjs';
+import {
+  MARKERS, expandMarkers, filtersHtml, footerHtml, headTags, headerHtml, nodelistHtml,
+  posterHtml, povPage, sectionsHtml, statsHtml,
+} from './lib/pages.mjs';
 import { scanText } from './lib/rules.mjs';
 
 const argv = process.argv.slice(2);
@@ -32,6 +36,7 @@ const rootFlag = argv.indexOf('--root');
 const root = resolve(
   rootFlag !== -1 && argv[rootFlag + 1] ? argv[rootFlag + 1] : join(dirname(fileURLToPath(import.meta.url)), '..'),
 );
+const libDir = join(dirname(fileURLToPath(import.meta.url)), 'lib'); // the build's own modules, not content
 const siteDir = join(root, 'site');
 const distDir = join(root, 'dist');
 
@@ -44,8 +49,7 @@ const MAX_DOC_BYTES = 20 * 1024 * 1024;
 const MAX_POV_BYTES = 200 * 1024;
 const POV_KEYS = new Set(['title', 'summary', 'type', 'topics', 'author', 'date', 'related', 'documents']);
 const TOPIC_KEYS = new Set(['id', 'title', 'view', 'parent', 'related']);
-const CONTENT_MARKER = '<!-- build:content -->';
-const CSP = "default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'";
+const REPO = 'Owen-Rogan/POV_Exchange';
 
 const errors = [];
 const report = (file, line, rule) => errors.push({ file, line, rule });
@@ -242,125 +246,6 @@ function loadPovs(topicIds) {
   return povs;
 }
 
-// -------------------------------------------------------------- rendering
-
-const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-
-function inline(nodes) {
-  return nodes.map((n) => {
-    switch (n.t) {
-      case 'text': return esc(n.v);
-      case 'code': return `<code>${esc(n.v)}</code>`;
-      case 'strong': return `<strong>${inline(n.c)}</strong>`;
-      case 'em': return `<em>${inline(n.c)}</em>`;
-      case 'link': return `<a href="${esc(n.href)}" rel="noopener noreferrer">${inline(n.c)}</a>`;
-      default: throw new Error('unknown inline node');
-    }
-  }).join('');
-}
-
-function blocksToHtml(blocks) {
-  return blocks.map((b) => {
-    switch (b.t) {
-      case 'h': return `<h${b.level}>${inline(b.c)}</h${b.level}>`;
-      case 'p': return `<p>${inline(b.c)}</p>`;
-      case 'quote': return `<blockquote><p>${inline(b.c)}</p></blockquote>`;
-      case 'ul': return `<ul>${b.items.map((i) => `<li>${inline(i)}</li>`).join('')}</ul>`;
-      case 'ol': return `<ol>${b.items.map((i) => `<li>${inline(i)}</li>`).join('')}</ol>`;
-      default: throw new Error('unknown block');
-    }
-  }).join('\n');
-}
-
-const fmtSize = (n) => (n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`);
-
-function pageHead({ title, description, up, og = '' }) {
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="${CSP}">
-<title>${esc(title)}</title>
-<meta name="description" content="${esc(description)}">
-${og}<meta name="color-scheme" content="light dark">
-<link rel="icon" href="data:,">
-<link rel="stylesheet" href="${up}styles.css">
-</head>`;
-}
-
-function povPage(p, ctx) {
-  const up = '../../';
-  const topicTitles = p.topics.map((id) => ctx.topicById.get(id).title);
-  const relatedPovs = p.related.map((s) => ctx.povBySlug.get(s));
-  const og = [
-    '<meta property="og:type" content="article">',
-    `<meta property="og:title" content="${esc(p.title)}">`,
-    `<meta property="og:description" content="${esc(p.summary)}">`,
-    '<meta property="og:site_name" content="POV Exchange">',
-  ].join('\n') + '\n';
-
-  const docs = p.documents.length
-    ? `<section class="docs" aria-labelledby="docs-h">
-<h2 id="docs-h">Documents</h2>
-<ul>
-${p.documents.map((d) => `<li><a href="${up}docs/${p.slug}/${esc(encodeURIComponent(d.name))}" download>${esc(d.name)}</a> <span class="size">${esc(d.ext.toUpperCase())}, ${fmtSize(d.bytes)}</span></li>`).join('\n')}
-</ul>
-</section>`
-    : '';
-  const related = relatedPovs.length
-    ? `<section class="related" aria-labelledby="rel-h">
-<h2 id="rel-h">Related</h2>
-<ul>
-${relatedPovs.map((r) => `<li><a href="../${r.slug}/">${esc(r.title)}</a></li>`).join('\n')}
-</ul>
-</section>`
-    : '';
-
-  return `${pageHead({ title: `${p.title} | POV Exchange`, description: p.summary, up, og })}
-<body>
-<a class="skip" href="#main">Skip to content</a>
-<header class="bar"><a class="brand" href="${up}">POV Exchange</a></header>
-<main id="main" class="page article">
-<p class="eyebrow">${p.type === 'document' ? 'Document' : 'POV'} &middot; ${esc(topicTitles.join(', '))}</p>
-<h1>${esc(p.title)}</h1>
-<p class="lede">${esc(p.summary)}</p>
-<p class="byline">By ${esc(p.author)} &middot; <time datetime="${esc(p.date)}">${esc(p.date)}</time></p>
-<div class="prose">
-${blocksToHtml(p.blocks)}
-</div>
-${docs}
-${related}
-<p class="back"><a href="${up}">&larr; All POVs</a></p>
-</main>
-<footer class="foot"><p>Practice opinions only. No client information.</p></footer>
-</body>
-</html>
-`;
-}
-
-function homeContent(topics, povs) {
-  const byTopic = new Map(topics.map((t) => [t.id, []]));
-  for (const p of povs) for (const id of p.topics) byTopic.get(id).push(p);
-  const topicById = new Map(topics.map((t) => [t.id, t]));
-  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
-
-  const sections = topics.map((t) => {
-    const items = byTopic.get(t.id);
-    const parent = t.parent ? `<p class="eyebrow">Part of ${esc(topicById.get(t.parent).title)}</p>\n` : '';
-    const cards = items.length
-      ? `<ul class="cards">\n${items.map((p) => `<li class="card"><a href="pov/${p.slug}/"><span class="card-kind">${p.type === 'document' ? 'Document' : 'POV'}</span><span class="card-title">${esc(p.title)}</span><span class="card-summary">${esc(p.summary)}</span><span class="card-meta">${esc(p.author)} &middot; ${esc(p.date)}</span></a></li>`).join('\n')}\n</ul>`
-      : '<p class="empty">No POVs on this topic yet.</p>';
-    return `<section class="topic" id="topic-${t.id}" aria-labelledby="t-${t.id}">
-${parent}<h2 id="t-${t.id}">${esc(t.title)}</h2>
-<p class="view">${esc(t.view)}</p>
-${cards}
-</section>`;
-  });
-
-  return `<p class="stats">${plural(povs.length, 'POV', 'POVs')} across ${plural(topics.length, 'topic', 'topics')}</p>\n${sections.join('\n')}`;
-}
-
 // -------------------------------------------------------------- data files
 
 function buildGraph(topics, povs) {
@@ -397,10 +282,23 @@ function buildGraph(topics, povs) {
 
 // ------------------------------------------------------------------- main
 
+// Pages in site/ that contain <!-- build:name --> markers the build expands.
+const TEMPLATE_PAGES = ['index.html', '404.html', 'add/index.html'];
+// Pure modules the browser reuses, so the Add page checks text exactly as the build does.
+const SHARED_MODULES = ['frontmatter.mjs', 'markdown.mjs', 'rules.mjs'];
+
 function validateSite() {
-  if (!existsSync(join(siteDir, 'index.html'))) report('site/index.html', 0, 'file is missing');
-  else if (!readText('site/index.html').includes(CONTENT_MARKER)) report('site/index.html', 0, `must contain the ${CONTENT_MARKER} marker`);
-  if (!existsSync(join(siteDir, '404.html'))) report('site/404.html', 0, 'file is missing');
+  const noop = Object.fromEntries(MARKERS.map((m) => [m, () => '']));
+  for (const rel of TEMPLATE_PAGES) {
+    const file = `site/${rel}`;
+    if (!existsSync(join(root, file))) { report(file, 0, 'file is missing'); continue; }
+    const { html, unknown } = expandMarkers(readText(file), noop);
+    for (const u of unknown) report(file, 0, `uses an unknown build marker (${u})`);
+    if (html.includes('<!-- build:')) report(file, 0, 'contains a malformed build marker');
+  }
+  if (existsSync(join(root, 'site/index.html')) && !/<!-- build:sections[ >-]/.test(readText('site/index.html'))) {
+    report('site/index.html', 0, 'must contain the <!-- build:sections --> marker');
+  }
   for (const reserved of ['data', 'docs', 'pov']) {
     if (existsSync(join(siteDir, reserved))) report(`site/${reserved}`, 0, 'is a name the build generates; rename or remove it');
   }
@@ -437,8 +335,21 @@ rmSync(distDir, { recursive: true, force: true });
 mkdirSync(distDir, { recursive: true });
 cpSync(siteDir, distDir, { recursive: true });
 
-write('index.html', readText('site/index.html').replace(CONTENT_MARKER, homeContent(topics, povs)));
+// Site templates -> pages.
+const fns = {
+  head: ({ up = '' }) => headTags(up),
+  header: ({ up = '', current = '' }) => headerHtml(up, current),
+  footer: () => footerHtml(),
+  poster: () => posterHtml(graph),
+  stats: () => statsHtml(topics, povs),
+  filters: () => filtersHtml(topics),
+  sections: () => sectionsHtml(topics, povs),
+  nodelist: () => nodelistHtml(topics, povs),
+  repo: () => REPO,
+};
+for (const rel of TEMPLATE_PAGES) write(rel, expandMarkers(readText(`site/${rel}`), fns).html);
 
+// Data for the browser.
 const counts = new Map(topics.map((t) => [t.id, 0]));
 for (const p of povs) for (const id of p.topics) counts.set(id, counts.get(id) + 1);
 write('data/topics.json', JSON.stringify(topics.map((t) => ({ ...t, count: counts.get(t.id) }))) + '\n');
@@ -448,8 +359,12 @@ write('data/povs.json', JSON.stringify(povs.map((p) => ({
 }))) + '\n');
 write('data/graph.json', JSON.stringify(graph) + '\n');
 
+// Shared validation modules for the Add page.
+for (const name of SHARED_MODULES) write(`js/shared/${name.replace(/\.mjs$/, '.js')}`, readFileSync(join(libDir, name), 'utf8'));
+
+// One page per POV, plus its documents.
 for (const p of povs) {
-  write(`pov/${p.slug}/index.html`, povPage(p, { topicById, povBySlug }));
+  write(`pov/${p.slug}/index.html`, povPage(p, { topicById, povBySlug, graph }));
   for (const d of p.documents) {
     mkdirSync(join(distDir, 'docs', p.slug), { recursive: true });
     copyFileSync(join(root, 'povs', p.slug, d.name), join(distDir, 'docs', p.slug, d.name));

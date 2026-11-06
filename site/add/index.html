@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Add a POV | POV Exchange</title>
+<meta name="description" content="Write a POV and send it to GitHub for review.">
+<!-- build:head up=../ -->
+</head>
+<body>
+<!-- build:header up=../ current=add -->
+<main id="main" class="page article">
+<p class="eyebrow">Contribute</p>
+<h1>Add a POV</h1>
+<p class="lede">Fill in the form and this page writes the file for you. Opening GitHub shows it ready to commit.</p>
+
+<aside class="notice" aria-labelledby="notice-h">
+<h2 id="notice-h">Before you start</h2>
+<ul>
+<li>This site is public. Practice opinions only: no client names, client data or internal links.</li>
+<li>Nothing is published from this page. You commit the file on GitHub, and people without write access send it as a pull request for review.</li>
+<li>The checks cannot read inside PDFs, decks or spreadsheets. Look inside any document before you upload it.</li>
+</ul>
+</aside>
+
+<form id="add-form" class="add-form" data-repo="<!-- build:repo -->" novalidate>
+<div class="field">
+<label for="f-title">Title</label>
+<input id="f-title" type="text" maxlength="120" autocomplete="off" required>
+</div>
+<div class="field">
+<label for="f-summary">Summary <span class="hint" id="summary-count">0 / 240</span></label>
+<input id="f-summary" type="text" maxlength="240" autocomplete="off" required aria-describedby="summary-help">
+<p class="help" id="summary-help">One or two sentences, shown on cards and in the graph.</p>
+</div>
+<div class="row">
+<div class="field">
+<label for="f-type">Kind</label>
+<select id="f-type">
+<option value="pov">POV (written take)</option>
+<option value="document">Document (files only)</option>
+</select>
+</div>
+<div class="field">
+<label for="f-author">Author</label>
+<input id="f-author" type="text" maxlength="80" autocomplete="name" required>
+</div>
+<div class="field">
+<label for="f-date">Date</label>
+<input id="f-date" type="text" inputmode="numeric" placeholder="YYYY-MM-DD" maxlength="10" autocomplete="off" required>
+</div>
+</div>
+<fieldset class="field">
+<legend>Topics</legend>
+<div class="checks" id="f-topics"></div>
+</fieldset>
+<fieldset class="field">
+<legend>Related POVs <span class="hint">optional</span></legend>
+<div class="checks" id="f-related"></div>
+</fieldset>
+<div class="field">
+<label for="f-docs">Document file names <span class="hint">optional</span></label>
+<input id="f-docs" type="text" autocomplete="off" aria-describedby="docs-help" placeholder="agents-deck.pdf, notes.docx">
+<p class="help" id="docs-help">Separate names with commas. Upload the files into the same folder on GitHub after you create this one (pdf, pptx, docx, xlsx, csv, txt, md; 20 MB each).</p>
+</div>
+<div class="field">
+<label for="f-slug">Folder name</label>
+<input id="f-slug" type="text" maxlength="60" autocomplete="off" spellcheck="false" aria-describedby="slug-help" required>
+<p class="help" id="slug-help">Becomes the web address. Lowercase letters, digits and hyphens. It is made from the title; change it if you like.</p>
+</div>
+<div class="field">
+<label for="f-body">Your POV <span class="hint">## headings, **bold**, *italic*, lists, &gt; quotes, https links</span></label>
+<textarea id="f-body" rows="14" spellcheck="true"></textarea>
+</div>
+
+<ul id="problems" class="problems" role="alert" hidden></ul>
+<p id="add-status" class="status" role="status" aria-live="polite"></p>
+<p class="actions">
+<a id="open-github" class="btn disabled" aria-disabled="true" rel="noopener noreferrer" target="_blank">Open on GitHub</a>
+<button id="copy-text" class="btn ghost" type="button" disabled>Copy the file text</button>
+</p>
+</form>
+<noscript><p class="notice-plain">This form needs JavaScript. Without it, follow the steps in CONTRIBUTING.md in the repository.</p></noscript>
+</main>
+<!-- build:footer -->
+</body>
+</html>
