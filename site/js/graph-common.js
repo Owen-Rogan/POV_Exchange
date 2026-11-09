@@ -3,7 +3,7 @@
 
 import { neighbourSet } from './graph-data.js';
 
-const SIZE = { topic: 12, pov: 6.5, doc: 3.4 };
+const SIZE = { topic: 12, pov: 6.5, doc: 3.4, term: 4.6 };
 
 /** World-space size of a node. Bigger topics for busier topics. */
 export function diameter(node) {
@@ -24,6 +24,7 @@ export function readPalette() {
     topic: get('--g-topic', '#4589ff'),
     pov: get('--g-pov', '#a56eff'),
     doc: get('--g-doc', '#42be65'),
+    term: get('--g-term', '#ff832b'),
     edge: get('--g-edge', '#8d8d8d'),
     lit: get('--g-lit', '#ffffff'),
   };
@@ -45,9 +46,9 @@ export function parseColor(text) {
 
 /** Seconds before each node blooms out of the centre: topics, then POVs, then documents. */
 export function introDelays(model) {
-  const count = { topic: 0, pov: 0, doc: 0 };
-  const start = { topic: 0, pov: 0.5, doc: 0.95 };
-  const step = { topic: 0.09, pov: 0.06, doc: 0.04 };
+  const count = { topic: 0, pov: 0, doc: 0, term: 0 };
+  const start = { topic: 0, pov: 0.5, doc: 0.95, term: 1.15 };
+  const step = { topic: 0.09, pov: 0.06, doc: 0.04, term: 0.03 };
   return Float32Array.from(model.nodes, (n) => Math.min(start[n.kind] + step[n.kind] * count[n.kind]++, 2.4));
 }
 

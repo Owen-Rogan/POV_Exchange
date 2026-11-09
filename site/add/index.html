@@ -19,7 +19,8 @@
 <ul>
 <li>This site is public. Practice opinions only: no client names, client data or internal links.</li>
 <li>Nothing is published from this page. You commit the file on GitHub, and people without write access send it as a pull request for review.</li>
-<li>The checks cannot read inside PDFs, decks or spreadsheets. Look inside any document before you upload it.</li>
+<li>Never upload a document here. Put it in Box, SharePoint or OneDrive and add its link below. The checks cannot read inside PDFs, decks or spreadsheets, so look inside any document first.</li>
+<li>Choose Draft until the practice has agreed the view.</li>
 </ul>
 </aside>
 
@@ -38,7 +39,14 @@
 <label for="f-type">Kind</label>
 <select id="f-type">
 <option value="pov">POV (written take)</option>
-<option value="document">Document (files only)</option>
+<option value="document">Document (links only)</option>
+</select>
+</div>
+<div class="field">
+<label for="f-status">Status</label>
+<select id="f-status">
+<option value="draft">Draft (still forming)</option>
+<option value="agreed">Agreed (the practice's position)</option>
 </select>
 </div>
 <div class="field">
@@ -58,11 +66,12 @@
 <legend>Related POVs <span class="hint">optional</span></legend>
 <div class="checks" id="f-related"></div>
 </fieldset>
-<div class="field">
-<label for="f-docs">Document file names <span class="hint">optional</span></label>
-<input id="f-docs" type="text" autocomplete="off" aria-describedby="docs-help" placeholder="agents-deck.pdf, notes.docx">
-<p class="help" id="docs-help">Separate names with commas. Upload the files into the same folder on GitHub after you create this one (pdf, pptx, docx, xlsx, csv, txt, md; 20 MB each).</p>
-</div>
+<fieldset class="field">
+<legend>Documents <span class="hint">optional</span></legend>
+<p class="help" id="docs-help">Links to Box, SharePoint or OneDrive only. Readers may be asked to sign in. Personal OneDrive links are not accepted; use a team site or Box.</p>
+<div id="doc-rows" class="doc-rows" aria-describedby="docs-help"></div>
+<p class="actions"><button type="button" id="add-doc" class="tool">Add a document link</button></p>
+</fieldset>
 <div class="field">
 <label for="f-slug">Folder name</label>
 <input id="f-slug" type="text" maxlength="60" autocomplete="off" spellcheck="false" aria-describedby="slug-help" required>

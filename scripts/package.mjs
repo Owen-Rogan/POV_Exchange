@@ -28,7 +28,7 @@ export const SAFE_BATCH = 95; // leave room: a README or two may be added by han
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 // Files and folders that belong in the project and are uploaded.
-const INCLUDE = ['.gitignore', 'CLAUDE.md', 'CONTRIBUTING.md', 'package.json', 'povs', 'scripts', 'site'];
+const INCLUDE = ['.gitignore', 'CLAUDE.md', 'CONTRIBUTING.md', 'package.json', 'site.config.json', 'povs', 'scripts', 'site'];
 
 /** Every file under `dir`, as paths relative to `base`, with forward slashes, sorted. */
 export function listFiles(base, dir = base) {
@@ -54,7 +54,9 @@ export function planBatches(files, max = SAFE_BATCH) {
   // group by sample folder so a POV and its documents travel together
   const groups = new Map();
   for (const f of samples) {
-    const parts = f.split('/'); // povs/samples/<folder>/<file>, or povs/samples/README.md
+    // povs/samples/<folder>/<file>, povs/samples/glossary/<term>.md, or povs/samples/README.md.
+    // A POV folder travels whole. Glossary terms are single files, so they are grouped as one set.
+    const parts = f.split('/');
     const key = parts.length > 3 ? parts[2] : '';
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(f);

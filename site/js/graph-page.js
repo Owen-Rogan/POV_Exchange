@@ -5,28 +5,23 @@
 // URL hash (kept in step as you explore, so every view can be shared):
 //   #n=p:some-slug     the selected node         #t=agents   topic filter
 //   #q=text            search                     #samples=0  samples hidden
+//   #drafts=1          drafts shown               #terms=1    glossary terms shown
 // Selecting a node adds a history entry, so Back steps through your hops.
 
 import { applyFilters, focusSet } from './graph-filter.js';
 import { withIndex } from './graph-data.js';
+import { paramsFromPrefs, prefsFromParams, readHashParams, savePref } from './prefs.js';
 import { createReader } from './reader.js';
 import { distinctDates, makeTimeline, prettyDate } from './timeline.js';
 import { pickTier } from './tier.js';
 import { stepIndex, tourSteps } from './tour.js';
 
 const MAX_QUERY = 100;
-const STORE_SAMPLES = 'pov-samples';
 
 async function getJson(path) {
   const res = await fetch(path);
   if (!res.ok) throw new Error(`${path}: ${res.status}`);
   return res.json();
-}
-
-function readHash() {
-  const raw = location.hash.slice(1);
-  if (raw === 'list' || raw === '') return new URLSearchParams();
-  return new URLSearchParams(raw);
 }
 
 export async function initGraphPage() {
@@ -44,8 +39,12 @@ export async function initGraphPage() {
   const searchBox = $('.gp-search');
   const input = $('#g-q');
   const chipList = $('.gp-chips');
-  const sampleLabel = $('.gp-samples');
+  const sampleLabel = $('.switch-samples');
+  const draftLabel = $('.switch-drafts');
+  const termLabel = $('.switch-terms');
   const sampleSwitch = sampleLabel.querySelector('input');
+  const draftSwitch = draftLabel.querySelector('input');
+  const termSwitch = termLabel.querySelector('input');
   const tools = $('.gp-tools');
   const count = $('.gp-count');
   const legend = $('.gp-legend');
@@ -63,8 +62,11 @@ export async function initGraphPage() {
 
   let data;
   try {
-    const [graph, povs, topics] = await Promise.all([getJson('../data/graph.json'), getJson('../data/povs.json'), getJson('../data/topics.json')]);
-    data = { model: withIndex(graph), povs, topics };
+    const [graph, povs, topics, glossary, site] = await Promise.all([
+      getJson('../data/graph.json'), getJson('../data/povs.json'), getJson('../data/topics.json'),
+      getJson('../data/glossary.json'), getJson('../data/site.json'),
+    ]);
+    data = { model: withIndex(graph), povs, topics, glossary, site };
   } catch (err) {
     console.warn('POV Exchange: could not load the graph data.', err);
     root.dataset.tier = 'static';
@@ -74,13 +76,16 @@ export async function initGraphPage() {
   const { model } = data;
   const povBySlug = new Map(data.povs.map((p) => [p.slug, p]));
   const topicById = new Map(data.topics.map((t) => [t.id, t]));
+  const glossaryBySlug = new Map(data.glossary.map((g) => [g.slug, g]));
   const hasSamples = model.nodes.some((n) => n.sample);
+  const hasDrafts = model.nodes.some((n) => n.status === 'draft');
+  const hasTerms = model.nodes.some((n) => n.kind === 'term');
   // The timeline follows the sample switch: it only spans dates that are actually shown.
   let dates = [];
   let timeline = makeTimeline([]);
 
   // ------------------------------------------------------------- state
-  const state = { q: '', topic: '', samples: true, until: null, selected: null };
+  const state = { q: '', topic: '', ...prefsFromParams(new URLSearchParams()), terms: false, until: null, selected: null };
   const history = []; // ids visited by hopping, for the reader's Back button
   const bodies = new Map();
   let engine = null;
@@ -88,7 +93,6 @@ export async function initGraphPage() {
   let playing = 0;
   let tour = null; // { steps, index }
 
-  try { if (hasSamples && localStorage.getItem(STORE_SAMPLES) === '0') state.samples = false; } catch { /* storage blocked */ }
 
   const isHidden = (id) => {
     const i = model.index.get(id);
@@ -96,7 +100,8 @@ export async function initGraphPage() {
   };
 
   const reader = createReader(root, {
-    model, povBySlug, topicById,
+    model, povBySlug, topicById, glossaryBySlug,
+    contactLine: data.site.contactLine,
     isHidden,
     loadBody(slug) {
       if (!bodies.has(slug)) {
@@ -118,7 +123,8 @@ export async function initGraphPage() {
     if (state.selected) p.set('n', state.selected);
     if (state.topic) p.set('t', state.topic);
     if (state.q) p.set('q', state.q);
-    if (hasSamples && !state.samples) p.set('samples', '0');
+    paramsFromPrefs(p, state);
+    if (state.terms) p.set('terms', '1');
     const s = p.toString();
     const url = location.pathname + location.search + (s ? `#${s}` : '');
     if (push) history_pushState(url); else window.history.replaceState(window.history.state, '', url);
@@ -128,14 +134,14 @@ export async function initGraphPage() {
   // ------------------------------------------------------------- filters
   function refresh({ frame = false } = {}) {
     result = applyFilters(model, povBySlug, topicById, {
-      q: state.q, topic: state.topic, samples: state.samples, until: state.until,
+      q: state.q, topic: state.topic, samples: state.samples, drafts: state.drafts, terms: state.terms, until: state.until,
     });
     if (engine) {
       engine.setVisible(result.visible, { frame });
       engine.setFocus(focusSet(model, result));
     }
     const shown = result.counts.pov;
-    const total = model.nodes.filter((n) => n.kind === 'pov' && (state.samples || !n.sample)).length;
+    const total = model.nodes.filter((n, i) => n.kind === 'pov' && (state.samples || !n.sample) && (state.drafts || n.status !== 'draft')).length;
     count.textContent = result.active ? `${matchedPovCount()} of ${total} POVs` : `${shown} ${shown === 1 ? 'POV' : 'POVs'}`;
     for (const b of chipList.querySelectorAll('.chip')) b.setAttribute('aria-pressed', String(b.dataset.topic === state.topic));
     for (const b of chipList.querySelectorAll('.chip')) b.hidden = isHidden(`t:${b.dataset.topic}`) && b.dataset.topic !== state.topic;
@@ -204,13 +210,20 @@ export async function initGraphPage() {
   });
 
   sampleSwitch.checked = state.samples;
-  sampleSwitch.addEventListener('change', () => {
+  draftSwitch.checked = state.drafts;
+  termSwitch.checked = state.terms;
+  const onSwitch = () => {
     state.samples = sampleSwitch.checked;
-    try { localStorage.setItem(STORE_SAMPLES, state.samples ? '1' : '0'); } catch { /* storage blocked: the choice lasts for this visit */ }
+    state.drafts = draftSwitch.checked;
+    state.terms = termSwitch.checked;
+    legend.querySelector('.lg-term').hidden = !state.terms;
+    savePref('samples', state.samples);
+    savePref('drafts', state.drafts);
     writeHash();
     rebuildTimeline();
     refresh({ frame: true });
-  });
+  };
+  for (const s of [sampleSwitch, draftSwitch, termSwitch]) s.addEventListener('change', onSwitch);
 
   tools.addEventListener('click', (ev) => {
     const b = ev.target instanceof Element ? ev.target.closest('[data-act]') : null;
@@ -239,7 +252,7 @@ export async function initGraphPage() {
   /** Rebuild the slider for the dates currently shown. Hides it when there is nothing to scrub. */
   function rebuildTimeline() {
     stopPlay();
-    dates = distinctDates(model.nodes.filter((n) => state.samples || !n.sample));
+    dates = distinctDates(model.nodes.filter((n) => (state.samples || !n.sample) && (state.drafts || n.status !== 'draft')));
     timeline = makeTimeline(dates);
     state.until = null;
     timeBox.hidden = !timeline.usable;
@@ -376,17 +389,25 @@ export async function initGraphPage() {
   tools.hidden = false;
   legend.hidden = false;
   help.hidden = false;
-  if (hasSamples) sampleLabel.hidden = false;
+  legend.querySelector('.lg-draft').hidden = !hasDrafts;
+  sampleLabel.hidden = !hasSamples;
+  draftLabel.hidden = !hasDrafts;
+  termLabel.hidden = !hasTerms;
   buildChips();
   setTimeout(() => { help.classList.add('fade'); }, 7000);
 
   function fromHash({ initial = false } = {}) {
-    const p = readHash();
+    const p = readHashParams();
     const t = p.get('t') ?? '';
     state.topic = topicById.has(t) ? t : '';
     state.q = (p.get('q') ?? '').slice(0, MAX_QUERY);
     input.value = state.q;
-    if (p.get('samples') === '0' && hasSamples) { state.samples = false; sampleSwitch.checked = false; }
+    Object.assign(state, prefsFromParams(p));
+    state.terms = p.get('terms') === '1' && hasTerms;
+    sampleSwitch.checked = state.samples;
+    draftSwitch.checked = state.drafts;
+    termSwitch.checked = state.terms;
+    legend.querySelector('.lg-term').hidden = !state.terms;
     rebuildTimeline();
     refresh({ frame: initial || true });
     const n = p.get('n');

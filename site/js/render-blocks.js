@@ -10,7 +10,11 @@
 
 const SAFE_HREF = /^https:\/\/[^\s"'<>]+$/;
 
-function appendInline(doc, parent, nodes) {
+// Where the glossary lives, seen from the page that shows the text (the reader is on /graph/).
+const DEFAULT_TERM_BASE = '../glossary/';
+const SAFE_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+function appendInline(doc, parent, nodes, opts) {
   for (const n of nodes) {
     switch (n.t) {
       case 'text':
@@ -25,16 +29,28 @@ function appendInline(doc, parent, nodes) {
       case 'strong':
       case 'em': {
         const el = doc.createElement(n.t);
-        appendInline(doc, el, n.c);
+        appendInline(doc, el, n.c, opts);
+        parent.append(el);
+        break;
+      }
+      case 'term': {
+        // A glossary term: a real link to its entry, with the definition for the pop-up. A slug that is not
+        // a plain name makes it ordinary text, so a malformed block can never build a strange address.
+        if (!SAFE_SLUG.test(n.slug ?? '')) { appendInline(doc, parent, n.c, opts); break; }
+        const el = doc.createElement('a');
+        el.setAttribute('class', 'term');
+        el.setAttribute('href', `${opts.termBase}#${n.slug}`);
+        el.setAttribute('data-def', String(n.def ?? ''));
+        appendInline(doc, el, n.c, opts);
         parent.append(el);
         break;
       }
       case 'link': {
-        if (!SAFE_HREF.test(n.href ?? '')) { appendInline(doc, parent, n.c); break; }
+        if (!SAFE_HREF.test(n.href ?? '')) { appendInline(doc, parent, n.c, opts); break; }
         const el = doc.createElement('a');
         el.setAttribute('href', n.href);
         el.setAttribute('rel', 'noopener noreferrer');
-        appendInline(doc, el, n.c);
+        appendInline(doc, el, n.c, opts);
         parent.append(el);
         break;
       }
@@ -45,23 +61,24 @@ function appendInline(doc, parent, nodes) {
 }
 
 /** @returns the elements for these blocks, in order, as an array (append them wherever needed) */
-export function renderBlocks(doc, blocks) {
+export function renderBlocks(doc, blocks, { termBase = DEFAULT_TERM_BASE } = {}) {
+  const opts = { termBase };
   const out = [];
   for (const b of blocks) {
     let el;
     switch (b.t) {
       case 'h':
         el = doc.createElement(`h${b.level === 2 ? 3 : 4}`); // the reader's own title is the h2, so POV headings sit one level lower
-        appendInline(doc, el, b.c);
+        appendInline(doc, el, b.c, opts);
         break;
       case 'p':
         el = doc.createElement('p');
-        appendInline(doc, el, b.c);
+        appendInline(doc, el, b.c, opts);
         break;
       case 'quote': {
         el = doc.createElement('blockquote');
         const p = doc.createElement('p');
-        appendInline(doc, p, b.c);
+        appendInline(doc, p, b.c, opts);
         el.append(p);
         break;
       }
@@ -70,7 +87,7 @@ export function renderBlocks(doc, blocks) {
         el = doc.createElement(b.t);
         for (const item of b.items) {
           const li = doc.createElement('li');
-          appendInline(doc, li, item);
+          appendInline(doc, li, item, opts);
           el.append(li);
         }
         break;

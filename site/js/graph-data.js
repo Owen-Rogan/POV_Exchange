@@ -35,7 +35,7 @@ const byDateDesc = (model) => (a, b) => {
  */
 export function connections(model, id, { limit = 8 } = {}) {
   const node = model.byId.get(id);
-  const out = { topics: [], related: [], siblings: [], moreSiblings: 0, docs: [], povs: [], pov: null };
+  const out = { topics: [], related: [], siblings: [], moreSiblings: 0, docs: [], povs: [], terms: [], pov: null };
   if (!node) return out;
   const near = [...(model.adj.get(id) ?? [])];
   const kind = (nid) => model.byId.get(nid)?.kind;
@@ -43,7 +43,10 @@ export function connections(model, id, { limit = 8 } = {}) {
   if (node.kind === 'topic') {
     out.povs = near.filter((n) => kind(n) === 'pov').sort(byDateDesc(model));
     out.topics = near.filter((n) => kind(n) === 'topic').sort();
+  } else if (node.kind === 'term') {
+    out.povs = near.filter((n) => kind(n) === 'pov').sort(byDateDesc(model));
   } else if (node.kind === 'pov') {
+    out.terms = near.filter((n) => kind(n) === 'term').sort();
     out.topics = near.filter((n) => kind(n) === 'topic').sort();
     out.related = near.filter((n) => kind(n) === 'pov').sort(byDateDesc(model));
     out.docs = near.filter((n) => kind(n) === 'doc').sort();

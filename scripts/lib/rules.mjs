@@ -24,6 +24,14 @@ const RULES = [
   ['contains bidirectional or invisible formatting characters', INVISIBLE],
 ];
 
+// Share links are long mixed-case strings, so the Slack-ID and token patterns would
+// raise false alarms on them. On a `documents:` line those two rules look at everything
+// except the link. Every other rule (email addresses, control and invisible characters,
+// markup) still looks at the whole line.
+const LINK_EXEMPT = new Set(['looks like a Slack ID', 'looks like an access token or key']);
+const DOCUMENT_LINE = /^\s*documents\s*:/;
+const stripLinks = (line) => line.replace(/https:\/\/[^\s"'\],]+/gi, 'https://link');
+
 const RAW_HTML = ['contains raw HTML or an <autolink> (use plain text or [text](https://...))', /<[A-Za-z/!?]/];
 
 /**
@@ -39,7 +47,9 @@ export function scanText(text, { html = false } = {}) {
     for (const [rule, re] of rules) {
       if (found.has(rule)) continue;
       // Inline code spans may legitimately contain "<". They are escaped on output.
-      const subject = rule === RAW_HTML[0] ? lines[i].replace(/`[^`]*`/g, '``') : lines[i];
+      let subject = lines[i];
+      if (rule === RAW_HTML[0]) subject = subject.replace(/`[^`]*`/g, '``');
+      else if (LINK_EXEMPT.has(rule) && DOCUMENT_LINE.test(subject)) subject = stripLinks(subject);
       if (re.test(subject)) found.set(rule, i + 1);
     }
   }

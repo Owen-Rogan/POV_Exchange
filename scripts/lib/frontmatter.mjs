@@ -21,25 +21,44 @@ function readScalar(s) {
   return { value: s.replace(/\s+#.*$/, '').trim() };
 }
 
+/**
+ * Split the inside of [ ... ] on commas that are not inside quotes, and find
+ * the closing bracket the same way. A title like "Plan, v2" or "Q&A [draft]"
+ * therefore stays in one piece.
+ */
+function readList(s) {
+  const items = [];
+  let quote = null;
+  let start = 1;
+  for (let i = 1; i < s.length; i++) {
+    const c = s[i];
+    if (quote) { if (c === quote) quote = null; continue; }
+    if (c === '"' || c === "'") { quote = c; continue; }
+    if (c === ',' || c === ']') {
+      items.push(s.slice(start, i));
+      start = i + 1;
+      if (c === ']') {
+        const rest = s.slice(i + 1).trim();
+        if (rest && !rest.startsWith('#')) return { error: 'unexpected text after list' };
+        const parts = items.map((p) => p.trim());
+        if (parts.length === 1 && parts[0] === '') return { value: [] };
+        const out = [];
+        for (const part of parts) {
+          if (!part) return { error: 'empty list item' };
+          const r = readScalar(part);
+          if (r.error) return r;
+          out.push(r.value);
+        }
+        return { value: out };
+      }
+    }
+  }
+  return { error: quote ? 'unterminated quote' : 'unterminated list' };
+}
+
 function readValue(raw) {
   const s = raw.trim();
-  if (s.startsWith('[')) {
-    const end = s.indexOf(']');
-    if (end === -1) return { error: 'unterminated list' };
-    const rest = s.slice(end + 1).trim();
-    if (rest && !rest.startsWith('#')) return { error: 'unexpected text after list' };
-    const inner = s.slice(1, end).trim();
-    if (!inner) return { value: [] };
-    const items = [];
-    for (const part of inner.split(',')) {
-      const p = part.trim();
-      if (!p) return { error: 'empty list item' };
-      const r = readScalar(p);
-      if (r.error) return r;
-      items.push(r.value);
-    }
-    return { value: items };
-  }
+  if (s.startsWith('[')) return readList(s);
   return readScalar(s);
 }
 

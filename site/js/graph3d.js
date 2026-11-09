@@ -20,12 +20,14 @@ attribute float aLight;
 attribute float aShow;
 attribute float aDelay;
 attribute float aPulse;
+attribute float aRing;
 uniform float uTime;
 uniform float uScale;
 uniform float uPx;
 varying vec3 vColor;
 varying float vLight;
 varying float vAlpha;
+varying float vRing;
 void main() {
   float t = clamp((uTime - aDelay) / ${BLOOM.toFixed(2)}, 0.0, 1.0);
   float e = 1.0 - pow(1.0 - t, 3.0);
@@ -39,6 +41,7 @@ void main() {
   vColor = aColor;
   vLight = aLight;
   vAlpha = e * aShow;
+  vRing = aRing;
 }`;
 
 const NODE_FRAG = `
@@ -46,10 +49,13 @@ uniform float uGlow;
 varying vec3 vColor;
 varying float vLight;
 varying float vAlpha;
+varying float vRing;
 void main() {
   float d = length(gl_PointCoord - 0.5) * 2.0;
   if (d > 1.0 || vAlpha < 0.01) discard;
   float core = smoothstep(${(1 / SPRITE + 0.03).toFixed(3)}, ${(1 / SPRITE - 0.04).toFixed(3)}, d);
+  // A draft is drawn as a ring: the middle of the core is cut away.
+  core *= mix(1.0, smoothstep(0.17, 0.23, d), vRing);
   float glow = pow(1.0 - d, 3.0) * uGlow;
   float dim = vLight < 0.0 ? mix(1.0, 0.16, -vLight) : 1.0;
   float a = clamp(core + glow * (0.55 + max(vLight, 0.0) * 0.6), 0.0, 1.0) * vAlpha * dim;
@@ -120,6 +126,7 @@ export function createPainter3D(stage, model, { onLost }) {
   const nShow = new Float32Array(N);
   const nDelay = new Float32Array(N);
   const nPulse = new Float32Array(N);
+  const nRing = Float32Array.from(model.nodes, (n) => (n.status === 'draft' ? 1 : 0));
   model.nodes.forEach((n, i) => { nPos.set([n.x, n.y, n.z], i * 3); });
 
   const nodeGeo = new THREE.BufferGeometry();
@@ -131,6 +138,7 @@ export function createPainter3D(stage, model, { onLost }) {
   nodeGeo.setAttribute('aShow', dyn(nShow, 1));
   nodeGeo.setAttribute('aDelay', new THREE.BufferAttribute(nDelay, 1));
   nodeGeo.setAttribute('aPulse', new THREE.BufferAttribute(nPulse, 1));
+  nodeGeo.setAttribute('aRing', new THREE.BufferAttribute(nRing, 1));
   const nodeMat = new THREE.ShaderMaterial({
     vertexShader: NODE_VERT,
     fragmentShader: NODE_FRAG,

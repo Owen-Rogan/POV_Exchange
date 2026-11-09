@@ -24,6 +24,15 @@ if (document.querySelector('.gp')) {
 } else if (document.querySelector('.by-topic')) {
   import('./library.js').then((m) => m.initLibrary()).catch(failed('the library'));
 }
+if (document.querySelector('.gloss')) {
+  import('./glossary.js').then((m) => m.initGlossary()).catch(failed('the glossary'));
+}
+if (document.querySelector('a.term[data-def]')) {
+  import('./terms.js').then((m) => m.initTerms()).catch(failed('the term pop-ups'));
+}
+if (document.querySelector('[data-share]')) {
+  import('./share.js').then((m) => m.initShare()).catch(failed('sharing'));
+}
 if (document.querySelector('.article')) {
   import('./article.js').then((m) => m.initArticle());
 }

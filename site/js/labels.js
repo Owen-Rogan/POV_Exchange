@@ -27,6 +27,7 @@ export function chooseLabels(items, ctx) {
     if (it.i === ctx.selected) p = PRIORITY.selected;
     else if (it.i === ctx.hover) p = PRIORITY.hover;
     else if (ctx.near.has(it.i) && it.kind !== 'doc') p = PRIORITY.neighbour;
+    else if (it.kind === 'term' && ctx.zoom >= 2.2) p = PRIORITY.pov - 5;
     else if (it.kind === 'topic') p = PRIORITY.topic + Math.min(it.weight ?? 0, 20) * 0.1;
     else if (it.kind === 'pov' && showPovs) p = PRIORITY.pov + Math.min(ctx.zoom, 6);
     if (p > 0) candidates.push({ it, p });

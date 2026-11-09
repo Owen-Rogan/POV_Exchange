@@ -7,8 +7,11 @@
 //   node scripts/build.mjs --check   validate only, write nothing
 //   node scripts/build.mjs --root D  use D instead of the repo root (tests)
 //
-// Inputs:  povs/topics.json, povs/<slug>/pov.md (+ documents), povs/samples/<slug>/pov.md, site/
-// Outputs: dist/  = site/ + data/*.json + data/pov/<slug>.json + docs/<slug>/* + pov/<slug>/index.html
+// Inputs:  povs/topics.json, povs/<slug>/pov.md, povs/glossary/*.md, povs/samples/..., site.config.json, site/
+// Outputs: dist/  = site/ + data/*.json + data/pov/<slug>.json + pov/<slug>/index.html
+//
+// Documents are links to Box, SharePoint or OneDrive, written in front matter as
+// `Title | link`. Nothing is uploaded into the repo, so a POV folder holds pov.md only.
 //
 // povs/samples/ holds fictional sample POVs. Every POV in it is flagged
 // `sample`, from its folder alone (never from front matter), so deleting that one
@@ -20,18 +23,21 @@
 // email address).
 
 import {
-  copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync,
+  cpSync, existsSync, lstatSync, mkdirSync, readdirSync,
   readFileSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { DEFAULTS, validateConfig } from './lib/config.mjs';
+import { parseDocumentEntry } from './lib/doc-links.mjs';
 import { normalise, splitFrontMatter } from './lib/frontmatter.mjs';
+import { compileMatcher, markTerms, usedTerms } from './lib/glossary.mjs';
 import { computeLayout } from './lib/layout.mjs';
 import { parseBlocks } from './lib/markdown.mjs';
 import {
-  MARKERS, expandMarkers, filtersHtml, footerHtml, headTags, headerHtml, latestHtml, nodelistHtml,
-  povPage, previewHtml, posterHtml, sectionsHtml, statsHtml, tilesHtml,
+  MARKERS, expandMarkers, filtersHtml, footerHtml, glossaryPageHtml, headTags, headerHtml, latestHtml,
+  nodelistHtml, povPage, previewHtml, posterHtml, sectionsHtml, statsHtml, tilesHtml,
 } from './lib/pages.mjs';
 import { scanText } from './lib/rules.mjs';
 
@@ -47,12 +53,12 @@ const distDir = join(root, 'dist');
 
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
-const DOC_NAME = /^[A-Za-z0-9][A-Za-z0-9._ -]*$/;
-const DOC_EXT = new Set(['pdf', 'pptx', 'docx', 'xlsx', 'csv', 'txt', 'md']);
-const TEXT_EXT = new Set(['csv', 'txt', 'md']);
-const MAX_DOC_BYTES = 20 * 1024 * 1024;
 const MAX_POV_BYTES = 200 * 1024;
-const POV_KEYS = new Set(['title', 'summary', 'type', 'topics', 'author', 'date', 'related', 'documents']);
+const MAX_DOCS = 20;
+const POV_KEYS = new Set(['title', 'summary', 'type', 'status', 'topics', 'author', 'date', 'related', 'documents']);
+const STATUSES = new Set(['draft', 'agreed']);
+const TERM_KEYS = new Set(['term', 'summary', 'aliases', 'related']);
+const RESERVED_FOLDERS = new Set(['samples', 'glossary']);
 const TOPIC_KEYS = new Set(['id', 'title', 'view', 'parent', 'related', 'sample']);
 const REPO = 'Owen-Rogan/POV_Exchange';
 
@@ -60,6 +66,19 @@ const errors = [];
 const report = (file, line, rule) => errors.push({ file, line, rule });
 const byName = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
 const readText = (rel) => normalise(readFileSync(join(root, rel), 'utf8'));
+
+// ------------------------------------------------------------- settings
+
+function loadConfig() {
+  const file = 'site.config.json';
+  if (!existsSync(join(root, file))) return { ...DEFAULTS };
+  let data;
+  try { data = JSON.parse(readText(file)); } catch { report(file, 0, 'is not valid JSON'); return { ...DEFAULTS }; }
+  const { config, problems } = validateConfig(data);
+  for (const p of problems) report(file, 0, p);
+  return config;
+}
+const config = loadConfig();
 
 // ---------------------------------------------------------------- topics
 
@@ -177,6 +196,10 @@ function loadPov(slug, topicIds, base = 'povs', sample = false) {
     if (type && type !== 'pov' && type !== 'document') { report(file, fm.fields.type.line, "'type' must be pov or document"); type = 'pov'; }
   }
 
+  // Status is required, so nothing becomes the practice's agreed position by default.
+  const status = str('status', 10);
+  if (status && !STATUSES.has(status)) { report(file, fm.fields.status.line, "'status' must be draft or agreed"); }
+
   const date = str('date', 10);
   if (date) {
     const m = DATE.exec(date);
@@ -191,27 +214,20 @@ function loadPov(slug, topicIds, base = 'povs', sample = false) {
   const related = list('related', false);
   const docsField = list('documents', false);
 
-  // Documents: only files listed in front matter are published.
+  // Documents are links to Box, SharePoint or OneDrive. Files are never uploaded into the repo.
   const documents = [];
-  const fileByName = new Map(entries.filter((e) => e.isFile()).map((e) => [e.name, e]));
-  const listed = new Set();
-  for (const name of docsField.items) {
-    const ext = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1).toLowerCase() : '';
-    const docPath = `${dir}/${name}`;
-    if (name.toLowerCase() === 'pov.md') { report(file, docsField.line, 'pov.md cannot be listed as a document'); continue; }
-    if (!DOC_NAME.test(name) || name.length > 100) { report(file, docsField.line, 'a document name uses characters that are not allowed'); continue; }
-    if (!DOC_EXT.has(ext)) { report(file, docsField.line, 'a document has a file type that is not allowed (pdf, pptx, docx, xlsx, csv, txt, md)'); continue; }
-    if (listed.has(name.toLowerCase())) { report(file, docsField.line, 'a document is listed twice'); continue; }
-    listed.add(name.toLowerCase());
-    if (!fileByName.has(name)) { report(file, docsField.line, 'a listed document is not in the folder'); continue; }
-    const bytes = lstatSync(join(root, docPath)).size;
-    if (bytes > MAX_DOC_BYTES) { report(docPath, 0, `is larger than ${MAX_DOC_BYTES / 1024 / 1024} MB`); continue; }
-    if (TEXT_EXT.has(ext)) for (const f of scanText(readText(docPath))) report(docPath, f.line, f.rule);
-    documents.push({ name, ext, bytes });
+  if (docsField.items.length > MAX_DOCS) report(file, docsField.line, `lists more than ${MAX_DOCS} documents`);
+  const seenLinks = new Set();
+  for (const entry of docsField.items) {
+    const doc = parseDocumentEntry(entry, { allowPersonalOneDrive: config.allowPersonalOneDrive });
+    if (!doc.ok) { report(file, docsField.line, doc.rule); continue; }
+    if (seenLinks.has(doc.url)) { report(file, docsField.line, 'the same document link is listed twice'); continue; }
+    seenLinks.add(doc.url);
+    documents.push({ title: doc.title, url: doc.url, host: doc.host });
   }
   for (const e of entries) {
-    if (e.isFile() && e.name !== 'pov.md' && !listed.has(e.name.toLowerCase())) {
-      report(`${dir}/${e.name}`, 0, 'file is not listed under documents in pov.md (or is not allowed)');
+    if (e.isFile() && e.name !== 'pov.md') {
+      report(`${dir}/${e.name}`, 0, 'documents must be links in pov.md, not uploaded files (remove this file)');
     }
   }
 
@@ -227,7 +243,7 @@ function loadPov(slug, topicIds, base = 'povs', sample = false) {
 
   if (errors.length > before) return null;
   return {
-    slug, title, summary, author, date, type, sample, dir,
+    slug, title, summary, author, date, type, status, sample, dir,
     topics: topics.items, related: related.items, relatedLine: related.line, file,
     documents, blocks,
   };
@@ -244,10 +260,12 @@ function loadPovs(topicIds) {
       if (e.name === 'README.md' || e.name.startsWith('_') || e.name.startsWith('.')) continue;
       if (!sample && e.name === 'topics.json') continue;
       if (!sample && e.name === 'samples' && e.isDirectory()) { readContainer('povs/samples', true); continue; }
+      if (e.name === 'glossary' && e.isDirectory()) continue; // read by loadGlossary()
       if (!e.isDirectory()) {
         report(`${base}/${e.name}`, 0, sample ? 'only POV folders belong in povs/samples/' : 'only topics.json and POV folders belong in povs/');
         continue;
       }
+      if (RESERVED_FOLDERS.has(e.name)) { report(`${base}/${e.name}`, 0, 'this folder name is reserved'); continue; }
       if (taken.has(e.name)) { report(`${base}/${e.name}`, 0, 'folder name is already used by another POV (names must be unique, including samples)'); continue; }
       taken.add(e.name);
       const p = loadPov(e.name, topicIds, base, sample);
@@ -278,9 +296,88 @@ function pruneTopics(all, povs) {
   }));
 }
 
+// -------------------------------------------------------------- glossary
+
+/**
+ * Glossary entries are single files: povs/glossary/<slug>.md for real terms and
+ * povs/samples/glossary/<slug>.md for samples (flagged `sample` by their folder alone).
+ */
+function loadGlossary() {
+  const terms = [];
+  const names = new Map(); // lower-case term or alias -> slug
+  const slugs = new Set();
+  for (const [base, sample] of [['povs/glossary', false], ['povs/samples/glossary', true]]) {
+    if (!existsSync(join(root, base))) continue;
+    for (const e of readdirSync(join(root, base), { withFileTypes: true }).sort(byName)) {
+      if (e.name === 'README.md' || e.name.startsWith('_') || e.name.startsWith('.')) continue;
+      const rel = `${base}/${e.name}`;
+      if (!e.isFile() || !e.name.endsWith('.md')) { report(rel, 0, 'only .md term files belong in the glossary folder'); continue; }
+      const slug = e.name.slice(0, -3);
+      if (!SLUG.test(slug) || slug.length > 60) { report(rel, 0, 'term file name must be lowercase letters, digits and hyphens (max 60 characters)'); continue; }
+      if (slugs.has(slug)) { report(rel, 0, 'a term with this file name already exists'); continue; }
+      slugs.add(slug);
+      if (lstatSync(join(root, rel)).size > 50 * 1024) { report(rel, 0, 'is larger than 50 KB'); continue; }
+
+      const before = errors.length;
+      const text = readText(rel);
+      for (const f of scanText(text, { html: true })) report(rel, f.line, f.rule);
+      const fm = splitFrontMatter(text);
+      for (const er of fm.errors) report(rel, er.line, er.rule);
+      if (fm.errors.length) continue;
+      for (const [k, f] of Object.entries(fm.fields)) if (!TERM_KEYS.has(k)) report(rel, f.line, 'unknown front matter key');
+
+      const one = (key, max) => {
+        const f = fm.fields[key];
+        if (!f) { report(rel, 0, `front matter is missing '${key}'`); return ''; }
+        if (typeof f.value !== 'string' || !f.value) { report(rel, f.line, `'${key}' must be text`); return ''; }
+        if (f.value.length > max) { report(rel, f.line, `'${key}' is longer than ${max} characters`); return ''; }
+        return f.value;
+      };
+      const many = (key, max) => {
+        const f = fm.fields[key];
+        if (!f) return { items: [], line: 0 };
+        if (!Array.isArray(f.value)) { report(rel, f.line, `'${key}' must be a list like [one, two]`); return { items: [], line: f.line }; }
+        if (f.value.length > max) report(rel, f.line, `'${key}' has more than ${max} entries`);
+        return { items: f.value, line: f.line };
+      };
+      const term = one('term', 60);
+      const summary = one('summary', 200);
+      const aliases = many('aliases', 8);
+      const related = many('related', 12);
+      for (const a of aliases.items) if (!a || a.length > 60) report(rel, aliases.line, 'an alias is empty or longer than 60 characters');
+      for (const name of [term, ...aliases.items]) {
+        const key = name.trim().toLowerCase();
+        if (!key) continue;
+        if (names.has(key)) report(rel, 0, 'a term or alias is already used by another entry');
+        else names.set(key, slug);
+      }
+
+      const seenRules = new Set();
+      const blocks = fm.body.trim()
+        ? parseBlocks(fm.body, (rule, line) => {
+          if (seenRules.has(rule)) return;
+          seenRules.add(rule);
+          report(rel, fm.bodyStartLine + line - 1, rule);
+        })
+        : [];
+      if (errors.length > before) continue;
+      terms.push({ slug, term, summary, aliases: aliases.items, related: related.items, relatedLine: related.line, blocks, sample, file: rel });
+    }
+  }
+  const known = new Set(terms.map((t) => t.slug));
+  for (const t of terms) {
+    for (const r of t.related) {
+      if (r === t.slug) report(t.file, t.relatedLine, 'a term cannot list itself as related');
+      else if (!known.has(r)) report(t.file, t.relatedLine, 'lists a related term that does not exist');
+    }
+  }
+  terms.sort((a, b) => (a.term.toLowerCase() < b.term.toLowerCase() ? -1 : 1));
+  return terms;
+}
+
 // -------------------------------------------------------------- data files
 
-function buildGraph(topics, povs) {
+function buildGraph(topics, povs, glossary = []) {
   const nodes = [];
   const edges = [];
   const seen = new Set();
@@ -302,25 +399,45 @@ function buildGraph(topics, povs) {
     for (const r of t.related) edge(`t:${t.id}`, `t:${r}`, 'topic');
   }
   for (const p of povs) {
-    nodes.push({ id: `p:${p.slug}`, kind: 'pov', ref: p.slug, label: p.title, date: p.date, ...(p.sample ? { sample: true } : {}) });
+    nodes.push({ id: `p:${p.slug}`, kind: 'pov', ref: p.slug, label: p.title, date: p.date, status: p.status, ...(p.sample ? { sample: true } : {}) });
     for (const id of p.topics) edge(`p:${p.slug}`, `t:${id}`, 'link');
     for (const r of p.related) edge(`p:${p.slug}`, `p:${r}`, 'related');
-    for (const d of p.documents) {
-      nodes.push({ id: `d:${p.slug}/${d.name}`, kind: 'doc', ref: p.slug, label: d.name, date: p.date, ...(p.sample ? { sample: true } : {}) });
-      edge(`d:${p.slug}/${d.name}`, `p:${p.slug}`, 'doc');
-    }
+    p.documents.forEach((d, i) => {
+      nodes.push({ id: `d:${p.slug}/${i + 1}`, kind: 'doc', ref: p.slug, label: d.title, date: p.date, status: p.status, ...(p.sample ? { sample: true } : {}) });
+      edge(`d:${p.slug}/${i + 1}`, `p:${p.slug}`, 'doc');
+    });
+  }
+  // Glossary terms are a fourth kind of node, linked to every POV that mentions them.
+  for (const g of glossary) {
+    nodes.push({ id: `g:${g.slug}`, kind: 'term', ref: g.slug, label: g.term, n: g.uses.length, ...(g.sample ? { sample: true } : {}) });
+    for (const slug of g.uses) edge(`g:${g.slug}`, `p:${slug}`, 'term');
   }
   const layout = computeLayout(nodes, edges);
   const newest = povs.length ? povs[0].slug : null; // povs are sorted newest first
   return { newest, nodes: nodes.map((n) => ({ ...n, ...layout.get(n.id) })), edges };
 }
 
+/**
+ * Work out which POVs mention which terms, and mark the first mention of each term
+ * inside each POV so it becomes a pop-up link. Changes `povs[].blocks` and sets `glossary[].uses`.
+ */
+function prepareGlossary(terms, list) {
+  for (const t of terms) t.uses = [];
+  const matcher = compileMatcher(terms);
+  const defs = new Map(terms.map((t) => [t.slug, t.summary]));
+  for (const p of list) {
+    for (const slug of usedTerms(p.blocks, matcher)) terms.find((t) => t.slug === slug).uses.push(p.slug);
+    p.blocks = markTerms(p.blocks, matcher, { defs }).blocks;
+  }
+  for (const t of terms) t.uses.sort();
+}
+
 // ------------------------------------------------------------------- main
 
 // Pages in site/ that contain <!-- build:name --> markers the build expands.
-const TEMPLATE_PAGES = ['index.html', 'graph/index.html', '404.html', 'add/index.html'];
+const TEMPLATE_PAGES = ['index.html', 'graph/index.html', 'glossary/index.html', '404.html', 'add/index.html'];
 // Pure modules the browser reuses, so the Add page checks text exactly as the build does.
-const SHARED_MODULES = ['frontmatter.mjs', 'markdown.mjs', 'rules.mjs'];
+const SHARED_MODULES = ['doc-links.mjs', 'frontmatter.mjs', 'markdown.mjs', 'rules.mjs'];
 
 function validateSite() {
   const noop = Object.fromEntries(MARKERS.map((m) => [m, () => '']));
@@ -337,7 +454,10 @@ function validateSite() {
   if (existsSync(join(root, 'site/graph/index.html')) && !/<!-- build:nodelist[ >-]/.test(readText('site/graph/index.html'))) {
     report('site/graph/index.html', 0, 'must contain the <!-- build:nodelist --> marker');
   }
-  for (const reserved of ['data', 'docs', 'pov', 'samples']) {
+  if (existsSync(join(root, 'site/glossary/index.html')) && !/<!-- build:glossary[ >-]/.test(readText('site/glossary/index.html'))) {
+    report('site/glossary/index.html', 0, 'must contain the <!-- build:glossary --> marker');
+  }
+  for (const reserved of ['data', 'docs', 'pov', 'samples']) { // glossary/ is a real page folder, not generated
     if (existsSync(join(siteDir, reserved))) report(`site/${reserved}`, 0, 'is a name the build generates; rename or remove it');
   }
 }
@@ -345,7 +465,9 @@ function validateSite() {
 validateSite();
 const allTopics = loadTopics();
 const povs = loadPovs(new Set(allTopics.map((t) => t.id)));
+const glossary = loadGlossary();
 const topics = pruneTopics(allTopics, povs);
+prepareGlossary(glossary, povs);
 povs.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : a.slug < b.slug ? -1 : 1));
 
 if (errors.length) {
@@ -357,7 +479,7 @@ if (errors.length) {
 
 const docCount = povs.reduce((n, p) => n + p.documents.length, 0);
 const sampleCount = povs.filter((p) => p.sample).length;
-const sampleNote = sampleCount ? `, ${sampleCount} of them samples` : '';
+const sampleNote = (sampleCount ? `, ${sampleCount} of them samples` : '') + (glossary.length ? `, ${glossary.length} glossary terms` : '');
 if (checkOnly) {
   console.log(`build: check passed (${povs.length} POVs, ${topics.length} topics, ${docCount} documents${sampleNote})`);
   process.exit(0);
@@ -365,7 +487,7 @@ if (checkOnly) {
 
 const topicById = new Map(topics.map((t) => [t.id, t]));
 const povBySlug = new Map(povs.map((p) => [p.slug, p]));
-const graph = buildGraph(topics, povs);
+const graph = buildGraph(topics, povs, glossary);
 const write = (rel, text) => {
   const abs = join(distDir, rel);
   mkdirSync(dirname(abs), { recursive: true });
@@ -378,9 +500,9 @@ cpSync(siteDir, distDir, { recursive: true });
 
 // Site templates -> pages.
 const fns = {
-  head: ({ up = '' }) => headTags(up),
+  head: ({ up = '' }) => headTags(up, config),
   header: ({ up = '', current = '' }) => headerHtml(up, current),
-  footer: () => footerHtml(),
+  footer: () => footerHtml(config),
   poster: () => posterHtml(graph),
   preview: () => previewHtml(graph),
   tiles: () => tilesHtml(topics, povs),
@@ -388,7 +510,8 @@ const fns = {
   filters: () => filtersHtml(topics),
   sections: () => sectionsHtml(topics, povs),
   latest: () => latestHtml(topics, povs),
-  nodelist: () => nodelistHtml(topics, povs),
+  nodelist: () => nodelistHtml(topics, povs, glossary),
+  glossary: () => glossaryPageHtml(glossary, povs),
   repo: () => REPO,
 };
 for (const rel of TEMPLATE_PAGES) write(rel, expandMarkers(readText(`site/${rel}`), fns).html);
@@ -402,10 +525,15 @@ write('data/topics.json', JSON.stringify(topics.map((t) => ({
   ...(sampleOnlyTopic.has(t.id) ? { sample: true } : {}),
 }))) + '\n');
 write('data/povs.json', JSON.stringify(povs.map((p) => ({
-  slug: p.slug, title: p.title, summary: p.summary, type: p.type, author: p.author, date: p.date,
+  slug: p.slug, title: p.title, summary: p.summary, type: p.type, status: p.status, author: p.author, date: p.date,
   topics: p.topics, related: p.related, documents: p.documents,
   ...(p.sample ? { sample: true } : {}),
 }))) + '\n');
+write('data/glossary.json', JSON.stringify(glossary.map((g) => ({
+  slug: g.slug, term: g.term, summary: g.summary, aliases: g.aliases, related: g.related, uses: g.uses,
+  ...(g.sample ? { sample: true } : {}),
+}))) + '\n');
+write('data/site.json', JSON.stringify({ contactLine: config.contactLine, siteUrl: config.siteUrl, publisher: config.publisher }) + '\n');
 // Full text for the Graph page reader, fetched one POV at a time so povs.json stays small.
 for (const p of povs) write(`data/pov/${p.slug}.json`, JSON.stringify({ slug: p.slug, blocks: p.blocks, documents: p.documents }) + '\n');
 write('data/graph.json', JSON.stringify(graph) + '\n');
@@ -413,13 +541,7 @@ write('data/graph.json', JSON.stringify(graph) + '\n');
 // Shared validation modules for the Add page.
 for (const name of SHARED_MODULES) write(`js/shared/${name.replace(/\.mjs$/, '.js')}`, readFileSync(join(libDir, name), 'utf8'));
 
-// One page per POV, plus its documents.
-for (const p of povs) {
-  write(`pov/${p.slug}/index.html`, povPage(p, { topicById, povBySlug, graph }));
-  for (const d of p.documents) {
-    mkdirSync(join(distDir, 'docs', p.slug), { recursive: true });
-    copyFileSync(join(root, p.dir, d.name), join(distDir, 'docs', p.slug, d.name));
-  }
-}
+// One page per POV.
+for (const p of povs) write(`pov/${p.slug}/index.html`, povPage(p, { topicById, povBySlug, graph, config, glossary }));
 
 console.log(`build: wrote dist/ (${povs.length} POVs, ${topics.length} topics, ${docCount} documents${sampleNote})`);

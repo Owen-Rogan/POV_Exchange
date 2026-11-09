@@ -82,10 +82,20 @@ export function createPainter2D(stage, model) {
           ctx.arc(s.x, s.y, r * 2.6, 0, Math.PI * 2);
           ctx.fill();
         }
-        ctx.fillStyle = rgba(col, dim * s.a);
         ctx.beginPath();
         ctx.arc(s.x, s.y, Math.max(r, 1), 0, Math.PI * 2);
-        ctx.fill();
+        if (n.status === 'draft') {
+          // a draft is a ring with a faint middle
+          ctx.fillStyle = rgba(col, 0.18 * dim * s.a);
+          ctx.fill();
+          ctx.strokeStyle = rgba(col, dim * s.a);
+          ctx.lineWidth = Math.max(1.5, r * 0.28);
+          ctx.stroke();
+          ctx.lineWidth = 1;
+        } else {
+          ctx.fillStyle = rgba(col, dim * s.a);
+          ctx.fill();
+        }
         if (light > 0.3) {
           ctx.strokeStyle = rgba(palette.lit, 0.9 * light);
           ctx.lineWidth = 1.5;

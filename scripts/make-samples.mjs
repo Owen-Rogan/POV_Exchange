@@ -59,11 +59,46 @@ const CLAIMS = ['need an owner', 'should start small', 'are a team sport', 'scal
 const HEADINGS = ['What we would say', 'Why it matters', 'A closer look', 'What to do first'];
 const AUTHORS = ['Sample Author A', 'Sample Author B', 'Sample Author C', 'Sample Author D', 'Sample Author E'];
 
+// Fictional glossary terms: slug, term, aliases, related (slugs), one-line definition.
+// Each says plainly that it is a sample, so it cannot be read as the practice's definition.
+const TERMS = [
+  ['agent', 'Agent', ['agents'], ['guardrail', 'human-in-the-loop'], 'Sample definition: software that takes steps toward a goal on its own.'],
+  ['guardrail', 'Guardrail', ['guardrails'], ['human-in-the-loop'], 'Sample definition: a rule that keeps a system inside agreed limits.'],
+  ['human-in-the-loop', 'Human in the loop', [], ['guardrail'], 'Sample definition: a person who reviews or approves before an action happens.'],
+  ['prompt', 'Prompt', ['prompts'], [], 'Sample definition: the instruction given to a model.'],
+  ['evaluation', 'Evaluation', ['evals'], ['benchmark'], 'Sample definition: a repeatable test of how well a system does a task.'],
+  ['benchmark', 'Benchmark', ['benchmarks'], ['evaluation'], 'Sample definition: a shared test used to compare systems.'],
+  ['hallucination', 'Hallucination', ['hallucinations'], ['grounding'], 'Sample definition: a confident answer that is not supported by the facts.'],
+  ['grounding', 'Grounding', [], ['hallucination', 'retrieval'], 'Sample definition: tying an answer to a named source.'],
+  ['retrieval', 'Retrieval', [], ['grounding'], 'Sample definition: fetching relevant material before answering.'],
+  ['pilot', 'Pilot', ['pilots'], ['proof-of-value'], 'Sample definition: a small, time-boxed trial of a new approach.'],
+  ['proof-of-value', 'Proof of value', [], ['pilot'], 'Sample definition: evidence that a pilot is worth scaling.'],
+  ['operating-model', 'Operating model', [], ['governance-board'], 'Sample definition: how people, process and tools fit together to deliver.'],
+  ['governance-board', 'Governance board', [], ['operating-model'], 'Sample definition: the group that decides what is allowed and who is accountable.'],
+  ['use-case', 'Use case', ['use cases'], ['pilot'], 'Sample definition: a specific task a system is meant to help with.'],
+  ['model-card', 'Model card', [], [], 'Sample definition: a short document describing what a model is for and its limits.'],
+  ['drift', 'Drift', [], ['monitoring'], 'Sample definition: performance slowly changing as the world changes.'],
+  ['monitoring', 'Monitoring', [], ['drift'], 'Sample definition: watching a live system for problems.'],
+  ['red-teaming', 'Red teaming', [], ['guardrail'], 'Sample definition: deliberately trying to break a system to find weaknesses.'],
+  ['data-lineage', 'Data lineage', [], [], 'Sample definition: a record of where data came from and how it changed.'],
+  ['upskilling', 'Upskilling', [], [], 'Sample definition: helping people learn the skills a new way of working needs.'],
+  ['change-champion', 'Change champion', ['champions'], ['upskilling'], 'Sample definition: a colleague who helps their team adopt something new.'],
+  ['shadow-ai', 'Shadow AI', [], ['governance-board'], 'Sample definition: AI tools used without the organisation knowing.'],
+  ['fine-tuning', 'Fine-tuning', [], [], 'Sample definition: adjusting a model with extra examples for one purpose.'],
+  ['context-window', 'Context window', [], ['prompt'], 'Sample definition: how much text a model can consider at once.'],
+  ['orchestration', 'Orchestration', [], ['agent'], 'Sample definition: coordinating several steps or systems to finish a job.'],
+];
+// Words from the terms above that the sample POV text can mention, so the pop-ups have something to show.
+const MENTIONS = ['guardrail', 'pilot', 'evaluation', 'human in the loop', 'agent', 'prompt', 'monitoring', 'use case', 'operating model', 'hallucination'];
+
+// Fake Box-shaped links. They look like real share links but point at nothing.
+const fakeLink = (slug, n) => `https://example.box.com/s/sample${slug.replace(/\D/g, '')}doc${n}`;
+
 const README = `# Sample POVs
 
 Everything in this folder is **fictional**. These POVs were generated to try out the library and the knowledge graph while the site is still being shaped. They say nothing about what the practice thinks.
 
-Each folder here is flagged as a sample by its location alone. On the site they carry a "Sample" tag, and a switch hides them.
+Each folder here is flagged as a sample by its location alone. On the site they carry a "Sample" tag, and a switch hides them. Document links here are fake: they look like Box links but open nothing. The \`glossary\` folder holds fictional terms in the same way.
 
 ## Remove them all
 
@@ -118,6 +153,7 @@ export function writeSamples(root, { count = 36, seed = 7, merge = false } = {})
     if (rand() < 0.1) chosen.add(pick(topicIds));
     const related = slugs.length > 0 && rand() < 0.3 ? [pick(slugs)] : [];
     const withDoc = rand() < 0.2;
+    const status = rand() < 0.6 ? 'agreed' : 'draft';
     const date = new Date(start + Math.floor((i / count) * 300) * 86400000).toISOString().slice(0, 10);
     const title = `Sample ${nn}: ${pick(SUBJECTS)} ${pick(CLAIMS)}`;
     const summary = pick([
@@ -131,11 +167,12 @@ export function writeSamples(root, { count = 36, seed = 7, merge = false } = {})
       `title: "${title}"`,
       `summary: "${summary}"`,
       'type: pov',
+      `status: ${status}`,
       `topics: [${[...chosen].join(', ')}]`,
       `author: "${pick(AUTHORS)}"`,
       `date: ${date}`,
       ...(related.length ? [`related: [${related.join(', ')}]`] : []),
-      ...(withDoc ? ['documents: ["sample-notes.txt"]'] : []),
+      ...(withDoc ? [`documents: ["Sample deck, part ${(i % 3) + 1} | ${fakeLink(nn, 1)}"]`] : []),
       '---',
     ].join('\n');
     const body = [
@@ -143,20 +180,30 @@ export function writeSamples(root, { count = 36, seed = 7, merge = false } = {})
       '',
       `## ${pick(HEADINGS)}`,
       '',
-      '- First sample point',
-      '- Second sample point',
-      '- Third sample point',
+      `- A sample point about each ${pick(MENTIONS)}`,
+      `- A second sample point, this time about a ${pick(MENTIONS)}`,
+      '- A third sample point with nothing special in it',
       '',
     ].join('\n');
 
     const dir = join(samplesDir, slug);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'pov.md'), `${front}\n${body}`);
-    if (withDoc) writeFileSync(join(dir, 'sample-notes.txt'), 'Fictional sample attachment. Not real content.\n');
     slugs.push(slug);
   }
+
+  // Fictional glossary terms, one file each, in their own sample folder.
+  const glossaryDir = join(samplesDir, 'glossary');
+  mkdirSync(glossaryDir, { recursive: true });
+  for (const [slug, term, aliases, related, summary] of TERMS) {
+    const lines = ['---', `term: "${term}"`, `summary: "${summary}"`];
+    if (aliases.length) lines.push(`aliases: [${aliases.map((a) => `"${a}"`).join(', ')}]`);
+    if (related.length) lines.push(`related: [${related.join(', ')}]`);
+    lines.push('---', 'This is a fictional sample term. It says nothing about how the practice uses the word.', '');
+    writeFileSync(join(glossaryDir, `${slug}.md`), lines.join('\n'));
+  }
   writeFileSync(join(samplesDir, 'README.md'), README);
-  return { count, topics: topics.length, addedTopics: added };
+  return { count, topics: topics.length, addedTopics: added, terms: TERMS.length };
 }
 
 function main() {
@@ -178,7 +225,7 @@ function main() {
     if (existsSync(join(repo, 'povs', 'samples'))) fail('povs/samples already exists. Delete it first if you want to generate again.');
     if (!existsSync(join(repo, 'povs', 'topics.json'))) fail('povs/topics.json is missing, so there is nothing to add topics to');
     const made = writeSamples(repo, { count, seed, merge: true });
-    console.log(`make-samples: wrote ${made.count} fictional POVs to povs/samples/ and added ${made.addedTopics} sample-only topics to povs/topics.json`);
+    console.log(`make-samples: wrote ${made.count} fictional POVs and ${made.terms} glossary terms to povs/samples/ and added ${made.addedTopics} sample-only topics to povs/topics.json`);
     console.log('make-samples: to remove them all later, delete povs/samples/');
     return;
   }

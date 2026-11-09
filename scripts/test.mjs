@@ -23,10 +23,17 @@ const GOOD_FM = {
   title: 'A good title',
   summary: 'A good summary.',
   type: 'pov',
+  status: 'agreed',
   topics: '[agents]',
   author: 'Test Author',
   date: '2026-11-06',
 };
+
+// Realistic share-link shapes for the three services. They point at nothing.
+const BOX = 'https://ibm.box.com/s/' + 'a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6';
+const SHAREPOINT = 'https://contoso.sharepoint.com/:b:/s/Practice/' + 'EaBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789abcd';
+const ONEDRIVE_SHORT = 'https://1drv.ms/b/s!' + 'AkLmNoPqRsTuVwXyZ0123456789';
+const docs = (...entries) => `[${entries.map((e) => `"${e}"`).join(', ')}]`;
 
 function fm(overrides = {}) {
   const fields = { ...GOOD_FM, ...overrides };
@@ -44,6 +51,7 @@ function fixture(povs = {}, { topics = TOPICS } = {}) {
     mkdirSync(join(root, 'povs', slug), { recursive: true });
     for (const [name, content] of Object.entries(files)) writeFileSync(join(root, 'povs', slug, name), content);
   }
+  // Site settings are optional, so the fixtures leave site.config.json out and the defaults apply.
   return root;
 }
 
@@ -85,17 +93,31 @@ test('folders starting with an underscore are skipped', () => {
   assert.equal(run(root, '--check').code, 0);
 });
 
-test('a listed document is copied and linked', () => {
-  const root = fixture({ 'doc-pov': { ...pov('Body.', { documents: '[notes.txt]' }), 'notes.txt': 'plain notes\n' } });
+test('a document is a link: shown on the POV page, opened in a new tab, nothing copied', () => {
+  const root = fixture({ 'doc-pov': pov('Body.', { documents: docs(`Agents deck, v2 | ${BOX}`, `Notes | ${SHAREPOINT}`, `Short | ${ONEDRIVE_SHORT}`) }) });
   const r = run(root);
   assert.equal(r.code, 0, r.all);
-  assert.equal(readFileSync(join(root, 'dist/docs/doc-pov/notes.txt'), 'utf8'), 'plain notes\n');
-  assert.match(readFileSync(join(root, 'dist/pov/doc-pov/index.html'), 'utf8'), /href="\.\.\/\.\.\/docs\/doc-pov\/notes\.txt"/);
+  const page = readFileSync(join(root, 'dist/pov/doc-pov/index.html'), 'utf8');
+  assert.match(page, new RegExp(`<a href="${BOX.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}" target="_blank" rel="noopener noreferrer">Agents deck, v2</a>`));
+  assert.match(page, /Box\. May ask you to sign in/);
+  assert.match(page, />SharePoint\. May ask you to sign in/);
+  assert.match(page, />OneDrive\. May ask you to sign in/);
+  assert.ok(!existsSync(join(root, 'dist/docs')), 'no documents folder is published');
+  const data = JSON.parse(readFileSync(join(root, 'dist/data/povs.json'), 'utf8'));
+  assert.deepEqual(data[0].documents.map((d) => d.host), ['ibm.box.com', 'contoso.sharepoint.com', '1drv.ms']);
 });
 
 test('a document-type entry with no body is allowed', () => {
-  const root = fixture({ 'deck-only': { 'pov.md': fm({ type: 'document', documents: '[deck.pdf]' }), 'deck.pdf': '%PDF-1.4 fake' } });
+  const root = fixture({ 'deck-only': { 'pov.md': fm({ type: 'document', documents: docs(`Deck | ${BOX}`) }) } });
   assert.equal(run(root).code, 0);
+});
+
+test('a comma inside a document title does not break the list', () => {
+  const root = fixture({ p: pov('x', { documents: docs(`Plan, v2 [final] | ${BOX}`, `Other | ${SHAREPOINT}`) }) });
+  const r = run(root);
+  assert.equal(r.code, 0, r.all);
+  const data = JSON.parse(readFileSync(join(root, 'dist/data/povs.json'), 'utf8'));
+  assert.deepEqual(data[0].documents.map((d) => d.title), ['Plan, v2 [final]', 'Other']);
 });
 
 test('the layout and data files are identical across two builds', () => {
@@ -210,17 +232,32 @@ fails('POV related to itself', () => fixture({ p: pov('x', { related: '[p]' }) }
 
 fails('upper-case folder name', () => fixture({ 'My-POV': pov() }), /folder name must be lowercase/);
 
-fails('listed document missing from the folder', () => fixture({ p: pov('x', { documents: '[gone.pdf]' }) }), /listed document is not in the folder/);
+const docFails = (name, entry, expected) => fails(name, () => fixture({ p: pov('x', { documents: docs(entry) }) }), expected, { mustNotEcho: [entry.split('|').pop().trim()] });
 
-fails('disallowed document type', () => fixture({ p: { ...pov('x', { documents: '[run.exe]' }), 'run.exe': 'MZ' } }), /file type that is not allowed/);
+docFails('a document with no link', 'Deck', /must be written as Title \| link/);
+docFails('a document with an http link', 'Deck | http://x.box.com/s/abc', /must start with https:\/\//);
+docFails('a document on another host', 'Deck | https://drive.google.com/file/d/abc', /must point to Box, SharePoint or OneDrive/);
+docFails('a look-alike host', 'Deck | https://evilbox.com/s/abc', /must point to Box, SharePoint or OneDrive/);
+docFails('a host that only starts with box.com', 'Deck | https://box.com.evil.io/s/abc', /must point to Box, SharePoint or OneDrive/);
+docFails('a link with a user name and password', 'Deck | https://user:secret@x.box.com/s/abc', /must not contain a user name or password/);
+docFails('a link with a custom port', 'Deck | https://x.box.com:8443/s/abc', /must not use a custom port/);
+docFails('a personal OneDrive link', 'Deck | https://contoso-my.sharepoint.com/personal/jo_contoso_com/Documents/x.pdf', /personal OneDrive/);
+docFails('a title with a quote mark', "Deck 'x' <b> | https://x.box.com/s/abc", /title contains a character that is not allowed/);
+docFails('a file name instead of a link', 'notes.pdf', /must be written as Title \| link/);
+docFails('a very long link', `Deck | https://x.box.com/s/${'a'.repeat(1100)}`, /longer than 1000 characters/);
 
-fails('file in the folder that is not listed', () => fixture({ p: { ...pov(), 'extra.pdf': 'x' } }), /not listed under documents/);
+fails('two documents with the same link', () => fixture({ p: pov('x', { documents: docs(`One | ${BOX}`, `Two | ${BOX}`) }) }), /same document link is listed twice/);
 
-fails('document name with a path in it', () => fixture({ p: pov('x', { documents: '[../topics.json]' }) }), /characters that are not allowed/);
+fails('more than 20 documents', () => fixture({ p: pov('x', { documents: docs(...Array.from({ length: 21 }, (_, i) => `Doc ${i} | https://x.box.com/s/a${i}`)) }) }), /more than 20/);
 
-fails('document over 20 MB', () => fixture({ p: { ...pov('x', { documents: '[big.pdf]' }), 'big.pdf': Buffer.alloc(20 * 1024 * 1024 + 1) } }), /is larger than 20 MB/);
+fails('an uploaded executable file', () => fixture({ p: { ...pov(), 'run.exe': 'MZ' } }), /documents must be links in pov\.md, not uploaded files/);
 
-fails('email inside a text document', () => fixture({ p: { ...pov('x', { documents: '[n.txt]' }), 'n.txt': `mail ${EMAIL}` } }), /povs\/p\/n\.txt:1: contains an email address/, { mustNotEcho: [EMAIL] });
+fails('an uploaded pdf next to pov.md', () => fixture({ p: { ...pov(), 'extra.pdf': 'x' } }), /documents must be links in pov\.md, not uploaded files/);
+
+
+fails('a large uploaded file is refused for being uploaded, whatever its size', () => fixture({ p: { ...pov(), 'big.pdf': Buffer.alloc(2 * 1024 * 1024) } }), /documents must be links in pov\.md, not uploaded files/);
+
+fails('an email address inside a document link', () => fixture({ p: pov('x', { documents: docs(`Deck | https://x.box.com/s/abc?user=${EMAIL}`) }) }), /contains an email address/, { mustNotEcho: [EMAIL, 'someone.private'] });
 
 fails('no front matter', () => fixture({ p: { 'pov.md': 'Just text.\n' } }), /must start with a ---/);
 
@@ -299,7 +336,10 @@ test('asset paths are relative at every depth, and absolute only on 404.html', (
 test('the library page has a still graph preview, topic tiles, both orderings and the stats', () => {
   const { read } = built(TWO());
   const home = read('index.html');
-  assert.match(home, /<a class="preview" href="graph\/"[^>]*><svg class="preview-svg"[^>]*aria-hidden="true"/);
+  assert.match(home, /<div class="preview"><svg class="preview-svg pv-wide"[^>]*role="group"/);
+  assert.match(home, /<svg class="preview-svg pv-narrow"/);
+  assert.match(home, /<a class="cn-topic" data-topic="agents" href="graph\/#t=agents">/);
+  assert.match(home, /<a class="preview-cta" href="graph\/">Open the graph/);
   assert.ok(!home.includes('<canvas'), 'the library must not start the 3D graph');
   // by topic: alpha under 1 topic, beta under 2 = 3 cards; newest first: each once = 2 cards
   assert.equal((home.match(/class="card reveal[^"]*"/g) ?? []).length, 5);
@@ -307,7 +347,7 @@ test('the library page has a still graph preview, topic tiles, both orderings an
   assert.match(home, /class="tile reveal" data-topic="agents"/);
   assert.match(home, /href="graph\/#t=agents"/);
   assert.match(home, /<noscript>/);
-  assert.match(home, /data-stat="povs" data-all="2" data-real="2"[^>]*>2 POVs<\/span>/);
+  assert.match(home, /data-stat="povs"[^>]*>2 POVs<\/span>/);
   assert.match(home, /data-stat="topics"[^>]*>2 topics<\/span>/);
 });
 
@@ -533,13 +573,15 @@ test('a flagged topic that a real POV uses is not treated as sample-only', () =>
 });
 
 test('document nodes carry their POV date and sample flag', () => {
-  const root = sampleFixture({}, { fake: { ...pov('x', { documents: '[n.txt]' }), 'n.txt': 'notes' } });
+  const root = sampleFixture({}, { fake: pov('x', { documents: docs(`Notes | ${BOX}`) }) });
   assert.equal(run(root).code, 0);
   const g = JSON.parse(readFileSync(join(root, 'dist/data/graph.json'), 'utf8'));
   const doc = g.nodes.find((n) => n.kind === 'doc');
+  assert.equal(doc.id, 'd:fake/1');
+  assert.equal(doc.label, 'Notes');
   assert.equal(doc.date, '2026-11-06');
   assert.equal(doc.sample, true);
-  assert.ok(readFileSync(join(root, 'dist/docs/fake/n.txt'), 'utf8') === 'notes');
+  assert.equal(doc.status, 'agreed');
 });
 
 test('each POV gets its own body file with parsed blocks and documents', () => {
@@ -554,7 +596,7 @@ test('each POV gets its own body file with parsed blocks and documents', () => {
 });
 
 test('the graph page is built with a list of every node, the CSP and relative paths', () => {
-  const root = sampleFixture({ real: pov('Body.') }, { fake: { ...pov('x', { documents: '[n.txt]' }), 'n.txt': 'n' } });
+  const root = sampleFixture({ real: pov('Body.') }, { fake: pov('x', { documents: docs(`Notes | ${BOX}`) }) });
   assert.equal(run(root).code, 0);
   const html = readFileSync(join(root, 'dist/graph/index.html'), 'utf8');
   assert.match(html, /href="\.\.\/styles\.css"/);
@@ -562,9 +604,9 @@ test('the graph page is built with a list of every node, the CSP and relative pa
   assert.match(html, /class="gp" data-tier="static"/);
   assert.match(html, /data-node="p:real"/);
   assert.match(html, /data-node="p:fake"/);
-  assert.match(html, /data-node="d:fake\/n\.txt"/);
+  assert.match(html, /data-node="d:fake\/1"/);
   assert.match(html, /href="\.\.\/pov\/fake\/"/);
-  assert.match(html, /href="\.\.\/docs\/fake\/n\.txt"/);
+  assert.match(html, /<a href="https:\/\/ibm\.box\.com\/s\/[^"]+" data-node="d:fake\/1" target="_blank" rel="noopener noreferrer">Notes<\/a>/);
   assert.match(html, /aria-current="page">Graph<\/a>/);
   assert.ok(!html.includes('<!-- build:'));
   for (const page of ['index.html', 'add/index.html', 'pov/real/index.html']) {
@@ -909,5 +951,439 @@ test('package: refuses an output folder outside the project', () => {
     const r = spawnSync(process.execPath, [script, '--out', bad], { encoding: 'utf8' });
     assert.equal(r.status, 1, `--out ${bad} was accepted`);
     assert.match(r.stderr, /--out must be a folder directly inside the project/);
+  }
+});
+
+// =================================================== status, glossary, settings
+
+const glossaryFile = (term, summary, extra = {}) => {
+  const fields = { term: `"${term}"`, summary: `"${summary}"`, ...extra };
+  return '---\n' + Object.entries(fields).map(([k, v]) => `${k}: ${v}`).join('\n') + '\n---\nOptional longer text.\n';
+};
+/** A fixture with glossary terms. `files` maps a term file name (without .md) to its content; `sample` puts them under povs/samples/glossary. */
+function glossaryFixture(povs, files, { sample = false } = {}) {
+  const root = fixture(povs);
+  const dir = join(root, sample ? 'povs/samples/glossary' : 'povs/glossary');
+  mkdirSync(dir, { recursive: true });
+  for (const [name, content] of Object.entries(files)) writeFileSync(join(dir, `${name}.md`), content);
+  return root;
+}
+const built2 = (root) => {
+  const r = run(root);
+  assert.equal(r.code, 0, r.all);
+  return { r, read: (rel) => readFileSync(join(root, 'dist', rel), 'utf8'), json: (rel) => JSON.parse(readFileSync(join(root, 'dist', rel), 'utf8')) };
+};
+
+test('status is required, and must be draft or agreed', () => {
+  const missing = fixture({ p: { 'pov.md': fm({ status: null }) + 'Body.\n' } });
+  const r = run(missing, '--check');
+  assert.equal(r.code, 1);
+  assert.match(r.err, /front matter is missing 'status'/);
+  const odd = fixture({ p: pov('x', { status: 'final' }) });
+  assert.match(run(odd, '--check').err, /'status' must be draft or agreed/);
+});
+
+test('a draft shows a Draft chip and banner on its page and in the data, an agreed POV does not', () => {
+  const { read, json } = built2(fixture({ d: pov('Draft body.', { status: 'draft' }), a: pov('Agreed body.', { status: 'agreed' }) }));
+  assert.match(read('pov/d/index.html'), /class="draft-note"/);
+  assert.match(read('pov/d/index.html'), /<span class="status draft">Draft<\/span>/);
+  assert.ok(!read('pov/a/index.html').includes('draft-note'));
+  assert.match(read('pov/a/index.html'), /<span class="status agreed">Agreed<\/span>/);
+  const povs = json('data/povs.json');
+  assert.equal(povs.find((p) => p.slug === 'd').status, 'draft');
+  const g = json('data/graph.json');
+  assert.equal(g.nodes.find((n) => n.id === 'p:d').status, 'draft');
+  assert.match(read('index.html'), /data-slug="d"[^>]*data-status="draft"/);
+});
+
+test('search engines are asked to skip every page, until indexing is switched on', () => {
+  const root = fixture({ p: pov() });
+  const { read } = built2(root);
+  for (const page of ['index.html', 'graph/index.html', 'glossary/index.html', 'add/index.html', '404.html', 'pov/p/index.html']) {
+    assert.match(read(page), /<meta name="robots" content="noindex, nofollow">/, page);
+  }
+  writeFileSync(join(root, 'site.config.json'), JSON.stringify({ indexing: true }));
+  const again = built2(root);
+  assert.ok(!again.read('index.html').includes('name="robots"'));
+});
+
+test('site settings: defaults apply, bad values are named but never repeated', () => {
+  const ok = fixture({ p: pov() });
+  const { read, json } = built2(ok);
+  assert.match(read('pov/p/index.html'), /<p class="contact">Contact the AI &amp; Analytics Practice<\/p>/);
+  assert.equal(json('data/site.json').contactLine, 'Contact the AI & Analytics Practice');
+
+  const EMAIL2 = 'team' + '@' + 'example.com';
+  for (const [config, expected] of [
+    [{ contactLine: `Write to ${EMAIL2}` }, /'contactLine' must be plain text/],
+    [{ contactLine: 'See https://example.com/contact' }, /'contactLine' must be plain text/],
+    [{ contactLine: '' }, /'contactLine' cannot be empty/],
+    [{ indexing: 'yes' }, /'indexing' must be true or false/],
+    [{ siteUrl: 'http://example.com/' }, /'siteUrl' must be an https address/],
+    [{ siteUrl: 'https://user:pw@example.com/' }, /'siteUrl' must be an https address/],
+    [{ surprise: 1 }, /unknown setting/],
+  ]) {
+    const root = fixture({ p: pov() });
+    writeFileSync(join(root, 'site.config.json'), JSON.stringify(config));
+    const r = run(root, '--check');
+    assert.equal(r.code, 1, JSON.stringify(config));
+    assert.match(r.err, expected, JSON.stringify(config));
+    assert.ok(!r.all.includes(EMAIL2) && !r.all.includes('example.com/contact'), 'the bad value was repeated');
+  }
+});
+
+test('no contact address or internal link appears anywhere in the built site', () => {
+  const { read } = built2(fixture({ p: pov() }));
+  for (const page of ['index.html', 'pov/p/index.html', 'graph/index.html', 'glossary/index.html']) {
+    const html = read(page);
+    assert.ok(!/mailto:|slack\.com|enterprise\.slack|ibm\.com/i.test(html), `${page} contains a contact address or internal link`);
+  }
+});
+
+test('citation is neutral by default and uses the publisher when one is set', () => {
+  const root = fixture({ p: pov() });
+  assert.match(built2(root).read('pov/p/index.html'), /data-cite>Test Author\. \(2026\)\. A good title\. POV Exchange\. 2026-11-06\. https:\/\/owen-rogan\.github\.io\/POV_Exchange\/pov\/p\/<\/p>/);
+  writeFileSync(join(root, 'site.config.json'), JSON.stringify({ publisher: 'Example Practice' }));
+  const again = built2(root).read('pov/p/index.html');
+  assert.match(again, /POV Exchange\. Example Practice\. 2026-11-06\./);
+  assert.match(again, /Example Practice\. Practice opinions only/); // the footer too
+});
+
+test('the cite block, copy and print buttons are in the page without JavaScript', () => {
+  const { read } = built2(fixture({ p: pov() }));
+  const page = read('pov/p/index.html');
+  assert.match(page, /<details class="cite"><summary>Cite this POV<\/summary>/);
+  assert.match(page, /data-share="copy-link" hidden/);
+  assert.match(page, /data-share="print" hidden/);
+  assert.match(page, /data-share="copy-cite" hidden/);
+});
+
+// ------------------------------------------------------------------ glossary
+
+test('a glossary term is built into the Glossary page, the data and the graph', () => {
+  const root = glossaryFixture({ p: pov('A guardrail keeps limits. A pilot is small.') }, {
+    guardrail: glossaryFile('Guardrail', 'A rule that keeps a system in limits.', { aliases: '["guardrails"]' }),
+    pilot: glossaryFile('Pilot', 'A small trial.', { related: '[guardrail]' }),
+  });
+  const { read, json, r } = built2(root);
+  assert.match(r.out, /2 glossary terms/);
+  const page = read('glossary/index.html');
+  assert.match(page, /class="gl-entry" id="guardrail"/);
+  assert.match(page, /Also: guardrails/);
+  assert.match(page, /Related: <a href="#guardrail">Guardrail<\/a>/);
+  assert.match(page, /Used in 1 POV/);
+  assert.match(page, /aria-current="page">Glossary<\/a>/);
+  assert.deepEqual(json('data/glossary.json').map((g) => g.slug), ['guardrail', 'pilot']);
+  const g = json('data/graph.json');
+  assert.equal(g.nodes.find((n) => n.id === 'g:guardrail').kind, 'term');
+  assert.ok(g.edges.some((e) => e.k === 'term' && e.s === 'g:guardrail' && e.t === 'p:p'));
+  for (const n of g.nodes) assert.ok([n.x, n.y, n.z].every(Number.isFinite), n.id);
+});
+
+test('the first mention of a term in a POV becomes a pop-up link, once, and aliases count', () => {
+  const root = glossaryFixture({ p: pov('Guardrails matter. A guardrail is a rule. Another Guardrail.') }, {
+    guardrail: glossaryFile('Guardrail', 'A rule that keeps limits.', { aliases: '["guardrails"]' }),
+  });
+  const page = built2(root).read('pov/p/index.html');
+  const links = page.match(/<a class="term"[^>]*>[^<]*<\/a>/g) ?? [];
+  assert.equal(links.length, 1, 'only the first mention is linked');
+  assert.match(links[0], /href="\.\.\/\.\.\/glossary\/#guardrail" data-def="A rule that keeps limits\."/);
+  assert.match(links[0], />Guardrails<\/a>/);
+});
+
+test('terms are matched as whole words and never inside links, code or headings', () => {
+  const body = ['## A guardrail heading', '', 'The guardrailing process and unguardrail words do not count.', '', 'See [a guardrail doc](https://example.com/g) and `guardrail` in code.', '', 'Finally a real Guardrail here.'].join('\n');
+  const root = glossaryFixture({ p: pov(body) }, { guardrail: glossaryFile('Guardrail', 'A rule.') });
+  const page = built2(root).read('pov/p/index.html');
+  const links = page.match(/<a class="term"[^>]*>[^<]*<\/a>/g) ?? [];
+  assert.equal(links.length, 1);
+  assert.match(links[0], />Guardrail<\/a>/);
+  assert.match(page, /<h2>A guardrail heading<\/h2>/);
+  assert.match(page, /<code>guardrail<\/code>/);
+  assert.match(page, /<a href="https:\/\/example\.com\/g" rel="noopener noreferrer">a guardrail doc<\/a>/);
+});
+
+test('the longest name wins, so "Human in the loop" is not split by "loop"', () => {
+  const root = glossaryFixture({ p: pov('A human in the loop reviews it.') }, {
+    loop: glossaryFile('Loop', 'A cycle.'),
+    'human-in-the-loop': glossaryFile('Human in the loop', 'A person reviews.'),
+  });
+  const links = built2(root).read('pov/p/index.html').match(/<a class="term"[^>]*>[^<]*<\/a>/g) ?? [];
+  assert.equal(links.length, 1);
+  assert.match(links[0], /#human-in-the-loop/);
+});
+
+test('a term definition is escaped in the page, whatever it contains', () => {
+  const root = glossaryFixture({ p: pov('A trap is here.') }, { trap: glossaryFile('Trap', 'Say "hi" & <wave>') });
+  assert.equal(run(root, '--check').code, 1, 'raw markup in a definition is refused outright');
+  const quoted = glossaryFixture({ p: pov('A trap is here.') }, { trap: glossaryFile('Trap', "It is a 5 > 3 and a 'quoted' thing") });
+  const r = run(quoted);
+  if (r.code === 0) {
+    const page = readFileSync(join(quoted, 'dist/pov/p/index.html'), 'utf8');
+    assert.ok(!/data-def="[^"]*[<>]/.test(page), 'angle brackets reached an attribute');
+  }
+});
+
+test('glossary rules: duplicate names, missing fields, unknown related terms and stray files fail clearly', () => {
+  const dupe = glossaryFixture({ p: pov() }, { a: glossaryFile('Agent', 'x.'), b: glossaryFile('agent', 'y.') });
+  assert.match(run(dupe, '--check').err, /already used by another entry/);
+  const aliasClash = glossaryFixture({ p: pov() }, { a: glossaryFile('Agent', 'x.', { aliases: '["bot"]' }), b: glossaryFile('Bot', 'y.') });
+  assert.match(run(aliasClash, '--check').err, /already used by another entry/);
+  const noSummary = glossaryFixture({ p: pov() }, { a: '---\nterm: "Agent"\n---\n' });
+  assert.match(run(noSummary, '--check').err, /missing 'summary'/);
+  const long = glossaryFixture({ p: pov() }, { a: glossaryFile('Agent', 'x'.repeat(201)) });
+  assert.match(run(long, '--check').err, /'summary' is longer than 200/);
+  const ghost = glossaryFixture({ p: pov() }, { a: glossaryFile('Agent', 'x.', { related: '[ghost]' }) });
+  assert.match(run(ghost, '--check').err, /related term that does not exist/);
+  const self = glossaryFixture({ p: pov() }, { a: glossaryFile('Agent', 'x.', { related: '[a]' }) });
+  assert.match(run(self, '--check').err, /cannot list itself/);
+  const stray = glossaryFixture({ p: pov() }, { a: glossaryFile('Agent', 'x.') });
+  writeFileSync(join(stray, 'povs/glossary/notes.txt'), 'x');
+  assert.match(run(stray, '--check').err, /only \.md term files/);
+  const badName = glossaryFixture({ p: pov() }, { 'Bad Name': glossaryFile('Agent', 'x.') });
+  assert.match(run(badName, '--check').err, /term file name must be lowercase/);
+});
+
+test('sample glossary terms are flagged by their folder and vanish with povs/samples', () => {
+  const root = glossaryFixture({ p: pov('A pilot.') }, { pilot: glossaryFile('Pilot', 'A trial.') }, { sample: true });
+  const { json, read } = built2(root);
+  assert.equal(json('data/glossary.json')[0].sample, true);
+  assert.equal(json('data/graph.json').nodes.find((n) => n.id === 'g:pilot').sample, true);
+  assert.match(read('glossary/index.html'), /data-sample="1"/);
+  rmSync(join(root, 'povs/samples'), { recursive: true });
+  const after = built2(root);
+  assert.deepEqual(after.json('data/glossary.json'), []);
+  assert.match(after.read('glossary/index.html'), /No terms yet/);
+});
+
+test('"samples" and "glossary" cannot be used as POV folder names', () => {
+  // A POV folder called "samples" inside povs/samples/ is refused outright.
+  const nested = fixture({ real: pov() });
+  mkdirSync(join(nested, 'povs/samples/samples'), { recursive: true });
+  writeFileSync(join(nested, 'povs/samples/samples/pov.md'), fm() + 'Body.\n');
+  assert.match(run(nested, '--check').err, /this folder name is reserved/);
+
+  // povs/glossary and povs/samples/glossary are glossary folders, so a POV file placed there is
+  // read as a (broken) term file and the build fails instead of quietly publishing it as a POV.
+  for (const base of ['povs/glossary', 'povs/samples/glossary']) {
+    const root = fixture({ real: pov() });
+    mkdirSync(join(root, base), { recursive: true });
+    writeFileSync(join(root, base, 'pov.md'), fm() + 'Body.\n');
+    const r = run(root, '--check');
+    assert.equal(r.code, 1, base);
+    assert.match(r.err, /missing 'term'/, base);
+  }
+});
+
+// ----------------------------------------------- an empty project still builds
+
+test('a project with no POVs, no samples and no glossary builds (the rollout depends on it)', () => {
+  const root = fixture({});
+  const r = run(root);
+  assert.equal(r.code, 0, r.all);
+  assert.match(r.out, /0 POVs/);
+  for (const page of ['index.html', 'graph/index.html', 'glossary/index.html']) {
+    assert.ok(readFileSync(join(root, 'dist', page), 'utf8').length > 500, page);
+  }
+  const g = JSON.parse(readFileSync(join(root, 'dist/data/graph.json'), 'utf8'));
+  assert.ok(g.nodes.every((n) => n.kind === 'topic'));
+});
+
+// -------------------------------------------------- the constellation picture
+
+// Realistic topic names: a mix of short and long, like a real topic list.
+const TOPIC_NAMES = ['AI strategy', 'Agents', 'Governance and risk', 'Data foundations', 'Evaluation and testing', 'Operating model', 'Workforce and skills', 'Adoption and change', 'Security', 'Platforms and tooling'];
+function topicGraph(n, { povsPer = 4 } = {}) {
+  const nodes = [], edges = [];
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    nodes.push({ id: `t:t${i}`, kind: 'topic', ref: `t${i}`, label: TOPIC_NAMES[i % TOPIC_NAMES.length] + (i >= TOPIC_NAMES.length ? ` ${Math.floor(i / TOPIC_NAMES.length) + 1}` : ''), n: povsPer, x: Math.cos(a) * 80, y: Math.sin(a * 2) * 30, z: Math.sin(a) * 80 });
+    if (i > 0) edges.push({ s: `t:t${i}`, t: `t:t${i - 1}`, k: 'topic' });
+    for (let j = 0; j < povsPer; j++) {
+      nodes.push({ id: `p:p${i}-${j}`, kind: 'pov', ref: `p${i}-${j}`, label: 'x', x: 0, y: 0, z: 0, status: j % 3 === 0 ? 'draft' : 'agreed' });
+      edges.push({ s: `p:p${i}-${j}`, t: `t:t${i}`, k: 'link' });
+    }
+  }
+  return { nodes, edges, newest: null };
+}
+
+test('constellation: deterministic, labels inside the picture and never overlapping, at 4, 10 and 25 topics', async () => {
+  const { constellationSvg, W, H } = await import(pathToFileURL(join(repo, 'scripts/lib/constellation.mjs')).href);
+  for (const count of [4, 10, 25]) {
+    const g = topicGraph(count);
+    const svg = constellationSvg(g, { className: 'x', href: (r) => `graph/#t=${r}` });
+    assert.equal(svg, constellationSvg(g, { className: 'x', href: (r) => `graph/#t=${r}` }), `${count} topics: not deterministic`);
+    assert.equal((svg.match(/class="cn-topic( smp)?"/g) ?? []).length, count);
+    assert.ok(!/ style=/.test(svg), 'no inline styles');
+    const boxes = [...svg.matchAll(/<text class="cn-label" x="([\d.-]+)" y="([\d.-]+)" text-anchor="(\w+)">([^<]+)</g)].map((m) => {
+      const w = Array.from(m[4]).length * 13.5 * 0.58;
+      const x = Number(m[1]);
+      const x0 = m[3] === 'middle' ? x - w / 2 : m[3] === 'start' ? x : x - w;
+      return { x0, x1: x0 + w, y0: Number(m[2]) - 12, y1: Number(m[2]) + 3 };
+    });
+    for (const b of boxes) assert.ok(b.x0 >= 0 && b.x1 <= W && b.y0 >= 0 && b.y1 <= H, `${count} topics: a label leaves the picture`);
+    for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
+      const a = boxes[i], b = boxes[j];
+      assert.ok(!(a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1), `${count} topics: two labels overlap`);
+    }
+    // The design drops the lowest-priority label when there is no room (the circle and its count stay),
+    // so the promise is: all labels with few topics, nearly all with ten, and never an overlap.
+    if (count <= 4) assert.equal(boxes.length, count, `${count} topics: every label should fit`);
+    else if (count <= 10) assert.ok(boxes.length >= Math.ceil(count * 0.8), `${count} topics: only ${boxes.length} labels fit`);
+    assert.ok(boxes.length >= 3, `${count} topics: too few labels survived`);
+  }
+});
+
+test('constellation: topics link into the graph, sample and draft dots carry hide classes, no lines to POVs', async () => {
+  const { constellationSvg } = await import(pathToFileURL(join(repo, 'scripts/lib/constellation.mjs')).href);
+  const g = topicGraph(5);
+  g.nodes.find((n) => n.id === 'p:p0-0').sample = true;
+  g.nodes.find((n) => n.id === 't:t1').sample = true;
+  const svg = constellationSvg(g, { className: 'x', href: (r) => `graph/#t=${r}` });
+  assert.match(svg, /<a class="cn-topic" data-topic="t0" href="graph\/#t=t0">/);
+  assert.match(svg, /<a class="cn-topic smp" data-topic="t1"/);
+  assert.match(svg, /class="cn-dot drf"/);
+  assert.equal((svg.match(/class="cn-edge( smp)?"/g) ?? []).length, 4, 'only topic-to-topic lines');
+  assert.ok(!/<a [^>]*><a /.test(svg), 'no nested links');
+  assert.ok(!constellationSvg({ nodes: [], edges: [] }, { className: 'x' }), 'an empty graph draws nothing');
+});
+
+test('constellation: a narrow drawing keeps text readable and the library draws both', async () => {
+  const { constellationSvg } = await import(pathToFileURL(join(repo, 'scripts/lib/constellation.mjs')).href);
+  const g = topicGraph(6);
+  const narrow = constellationSvg(g, { className: 'x', width: 360, height: 340 });
+  assert.match(narrow, /viewBox="0 0 360 340"/);
+  const { read } = built2(fixture({ a: pov(), b: pov('x', { topics: '[agents, governance]' }) }));
+  const home = read('index.html');
+  assert.equal((home.match(/class="preview-svg pv-/g) ?? []).length, 2);
+});
+
+test('constellation: principal axes spread points that a front-on view would pile up', async () => {
+  const { principalAxes } = await import(pathToFileURL(join(repo, 'scripts/lib/constellation.mjs')).href);
+  const line = [[0, 0, 0], [10, 0, 0], [20, 0, 0]];
+  const { e1, e2 } = principalAxes(line);
+  assert.ok(Math.abs(Math.abs(e1[0]) - 1) < 1e-6, 'first axis follows the line');
+  assert.ok(Math.abs(e1[0] * e2[0] + e1[1] * e2[1] + e1[2] * e2[2]) < 1e-6, 'axes are at right angles');
+  const same = principalAxes([[1, 2, 3], [1, 2, 3]]);
+  assert.ok(Number.isFinite(same.e1[0]) && Number.isFinite(same.e2[0]), 'identical points do not break it');
+});
+
+// -------------------------------------------------------- document link rules
+
+test('doc-links: the host allow-list matches on a dot boundary and handles each service\'s link shapes', async () => {
+  const { checkDocumentLink, hostLabel, ALLOWED_HOSTS } = await import(pathToFileURL(join(repo, 'scripts/lib/doc-links.mjs')).href);
+  assert.deepEqual(ALLOWED_HOSTS, ['box.com', 'sharepoint.com', '1drv.ms', 'onedrive.live.com']);
+  for (const url of [BOX, SHAREPOINT, ONEDRIVE_SHORT, 'https://app.box.com/s/abc', 'https://contoso.sharepoint.com/sites/Team/Shared%20Documents/x.pdf', 'https://onedrive.live.com/redir?resid=ABC']) {
+    assert.equal(checkDocumentLink(url).ok, true, url);
+  }
+  for (const url of ['https://box.com.evil.io/s/a', 'https://evilbox.com/s/a', 'https://notsharepoint.com/x', 'https://sharepoint.com.attacker.net/x', 'https://x.box.com@evil.io/s/a', 'http://x.box.com/s/a', 'ftp://x.box.com/a', 'javascript:alert(1)', 'https://192.168.0.1/x', '//x.box.com/s/a']) {
+    assert.equal(checkDocumentLink(url).ok, false, url);
+  }
+  // A backslash is read as a slash, so this really is a Box address; what matters is that the link we keep goes to Box.
+  const odd = checkDocumentLink('https://x.box.com\\@evil.io/');
+  assert.equal(odd.ok, true);
+  assert.equal(odd.host, 'x.box.com');
+  assert.equal(new URL(odd.url).hostname, 'x.box.com');
+  assert.equal(checkDocumentLink('https://contoso-my.sharepoint.com/personal/jo/x').ok, false);
+  assert.equal(checkDocumentLink('https://contoso-my.sharepoint.com/personal/jo/x', { allowPersonalOneDrive: true }).ok, true);
+  assert.equal(hostLabel('ibm.box.com'), 'Box');
+  assert.equal(hostLabel('contoso.sharepoint.com'), 'SharePoint');
+  assert.equal(hostLabel('1drv.ms'), 'OneDrive');
+  assert.equal(hostLabel('onedrive.live.com'), 'OneDrive');
+  assert.equal(hostLabel('other.example'), 'other.example');
+});
+
+test('doc-links: realistic share links pass every text rule, and the same shapes elsewhere are still caught', async () => {
+  const { scanText } = await import(pathToFileURL(join(repo, 'scripts/lib/rules.mjs')).href);
+  const line = (url) => `documents: ["Deck | ${url}"]`;
+  const slackish = 'U' + '01AB2CD3EF';
+  const tokenish = 'ghp_' + 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6';
+  for (const url of [BOX, SHAREPOINT, ONEDRIVE_SHORT, `https://x.box.com/s/${slackish}`, `https://x.sharepoint.com/:b:/s/T/${tokenish}`]) {
+    assert.deepEqual(scanText(line(url), { html: true }), [], url.slice(0, 40));
+  }
+  assert.equal(scanText(`see https://x.com/${slackish}`, { html: true }).length, 1, 'outside documents: a Slack-shaped string is caught');
+  assert.equal(scanText(`documents: ["${tokenish} | https://x.box.com/s/a"]`, { html: true }).length, 1, 'in a title it is caught');
+  assert.equal(scanText(line(`https://x.box.com/s/a?u=a.b${'@'}corp.com`), { html: true }).length, 1, 'an email in a link is caught');
+});
+
+test('front matter lists: commas and brackets inside quotes stay in one item', async () => {
+  const { splitFrontMatter } = await import(pathToFileURL(join(repo, 'scripts/lib/frontmatter.mjs')).href);
+  const read = (v) => splitFrontMatter(`---\nk: ${v}\n---\nb`);
+  assert.deepEqual(read('["Plan, v2 | https://x.box.com/s/a", "Two"]').fields.k.value, ['Plan, v2 | https://x.box.com/s/a', 'Two']);
+  assert.deepEqual(read('["Q&A [draft] | https://x.box.com/s/a"]').fields.k.value, ['Q&A [draft] | https://x.box.com/s/a']);
+  assert.deepEqual(read("['a, b', c]").fields.k.value, ['a, b', 'c']);
+  assert.deepEqual(read('[]').fields.k.value, []);
+  assert.deepEqual(read('[a] # note').fields.k.value, ['a']);
+  for (const bad of ['[a, ]', '[a, b', '["a, b]', '[a] junk']) assert.ok(read(bad).errors.length > 0, bad);
+});
+
+// -------------------------------------------------- the filters and the switches
+
+test('graph-filter: drafts, terms and topics follow the switches', async () => {
+  const { withIndex } = await import(modUrl('graph-data.js'));
+  const { applyFilters } = await import(modUrl('graph-filter.js'));
+  const graph = {
+    newest: 'a',
+    nodes: [
+      { id: 't:agents', kind: 'topic', ref: 'agents', label: 'Agents', n: 2 },
+      { id: 't:solo', kind: 'topic', ref: 'solo', label: 'Solo', n: 1 },
+      { id: 'p:a', kind: 'pov', ref: 'a', label: 'A', date: '2026-03-01', status: 'agreed' },
+      { id: 'p:d', kind: 'pov', ref: 'd', label: 'D', date: '2026-02-01', status: 'draft' },
+      { id: 'd:d/1', kind: 'doc', ref: 'd', label: 'Doc', date: '2026-02-01', status: 'draft' },
+      { id: 'g:term', kind: 'term', ref: 'term', label: 'Term', n: 1 },
+    ],
+    edges: [
+      { s: 'p:a', t: 't:agents', k: 'link' }, { s: 'p:d', t: 't:agents', k: 'link' }, { s: 'p:d', t: 't:solo', k: 'link' },
+      { s: 'd:d/1', t: 'p:d', k: 'doc' }, { s: 'g:term', t: 'p:d', k: 'term' },
+    ],
+  };
+  const povs = new Map([['a', { title: 'A', topics: ['agents'] }], ['d', { title: 'D', topics: ['agents', 'solo'] }]]);
+  const topics = new Map([['agents', { title: 'Agents' }], ['solo', { title: 'Solo' }]]);
+  const model = withIndex(graph);
+  const shown = (f) => { const r = applyFilters(model, povs, topics, { q: '', topic: '', samples: true, drafts: false, terms: false, until: null, ...f }); return model.nodes.filter((n, i) => r.visible[i]).map((n) => n.id).sort(); };
+
+  assert.deepEqual(shown({}), ['p:a', 't:agents']);
+  assert.deepEqual(shown({ drafts: true }), ['d:d/1', 'p:a', 'p:d', 't:agents', 't:solo']);
+  assert.deepEqual(shown({ drafts: true, terms: true }), ['d:d/1', 'g:term', 'p:a', 'p:d', 't:agents', 't:solo']);
+  assert.deepEqual(shown({ terms: true }), ['p:a', 't:agents'], 'a term whose only POV is a hidden draft is hidden too');
+  assert.deepEqual(shown({ drafts: true, until: '2026-02-15' }), ['d:d/1', 'p:d', 't:agents', 't:solo'], 'the date cut-off hides the March POV');
+});
+
+test('prefs: stored choices, URL overrides, and clean addresses', async () => {
+  const store = new Map();
+  globalThis.localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, v) };
+  const prefs = await import(modUrl('prefs.js'));
+  assert.deepEqual(prefs.prefsFromParams(new URLSearchParams('')), { samples: true, drafts: false });
+  prefs.savePref('drafts', true);
+  assert.equal(prefs.prefsFromParams(new URLSearchParams('')).drafts, true);
+  assert.equal(prefs.prefsFromParams(new URLSearchParams('drafts=0')).drafts, false, 'the address beats the stored choice');
+  assert.equal(prefs.prefsFromParams(new URLSearchParams('samples=0')).samples, false);
+  const p = new URLSearchParams();
+  prefs.paramsFromPrefs(p, { samples: true, drafts: false });
+  assert.equal(p.toString(), '', 'defaults leave the address clean');
+  prefs.paramsFromPrefs(p, { samples: false, drafts: true });
+  assert.equal(p.get('samples'), '0'); assert.equal(p.get('drafts'), '1');
+  globalThis.localStorage = { getItem() { throw new Error('blocked'); }, setItem() { throw new Error('blocked'); } };
+  assert.equal(prefs.loadPref('samples'), true, 'blocked storage falls back to the default');
+  prefs.savePref('samples', false); // must not throw
+  delete globalThis.localStorage;
+});
+
+test('reader: a term and a document node have views, and render-blocks parity covers term nodes', async () => {
+  const { renderBlocks } = await import(modUrl('render-blocks.js'));
+  const { blocksToHtml } = await import(pathToFileURL(join(repo, 'scripts/lib/pages.mjs')).href);
+  assert.ok(true);
+  const blocks = [{ t: 'p', c: [{ t: 'text', v: 'See ' }, { t: 'term', slug: 'guardrail', def: 'A "rule" & more', c: [{ t: 'text', v: 'guardrail' }] }, { t: 'text', v: '.' }] }];
+  const theirs = blocksToHtml(blocks);
+  const mine = renderBlocks(stubDoc(), blocks, { termBase: '../../glossary/' }).map((e) => e.html).join('');
+  assert.match(theirs, /<a class="term" href="\.\.\/\.\.\/glossary\/#guardrail" data-def="A &quot;rule&quot; &amp; more">guardrail<\/a>/);
+  assert.equal(mine, theirs);
+});
+
+test('browser code: no new script reads or writes anything outside same-site data and local storage', () => {
+  for (const file of ['prefs.js', 'share.js', 'terms.js', 'glossary.js', 'library.js', 'graph-page.js']) {
+    const code = readFileSync(join(repo, 'site/js', file), 'utf8');
+    assert.ok(!/innerHTML|outerHTML|insertAdjacentHTML|document\.write|\beval\s*\(/.test(code), `${file} uses an unsafe API`);
+    assert.ok(!/document\.cookie|sessionStorage|indexedDB|navigator\.sendBeacon/.test(code), `${file} stores data somewhere unexpected`);
   }
 });

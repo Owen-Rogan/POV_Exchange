@@ -25,7 +25,9 @@
 <input id="g-q" type="search" autocomplete="off" spellcheck="false" maxlength="100" placeholder="Search  ( / )">
 </div>
 <ul class="gp-chips chips" aria-label="Filter by topic" hidden></ul>
-<label class="switch gp-samples" hidden><input type="checkbox" class="sample-switch" checked><span>Show samples</span></label>
+<label class="switch switch-drafts" hidden><input type="checkbox" class="draft-switch"><span>Show drafts</span></label>
+<label class="switch switch-samples" hidden><input type="checkbox" class="sample-switch" checked><span>Show samples</span></label>
+<label class="switch switch-terms" hidden><input type="checkbox" class="term-switch"><span>Show terms</span></label>
 <div class="gp-tools" hidden>
 <button type="button" class="tool" data-act="frame" title="Fit everything in view (F)">Frame</button>
 <button type="button" class="tool" data-act="reset" title="Reset the view (0)">Reset</button>
@@ -39,6 +41,8 @@
 <span><i class="dot t"></i>Topic</span>
 <span><i class="dot p"></i>POV</span>
 <span><i class="dot d"></i>Document</span>
+<span class="lg-term" hidden><i class="dot g"></i>Term</span>
+<span class="lg-draft"><i class="dot ring"></i>Draft</span>
 </div>
 
 <div class="gp-help" hidden><p>Drag to turn. Scroll to zoom. Right-drag or Shift-drag to move. Click a node to read it. Double-click to focus.</p></div>
