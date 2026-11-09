@@ -22,6 +22,7 @@ site/fonts/             IBM Plex Sans 300/400/600 and Mono 400 (SIL OFL), commit
 scripts/build.mjs       validate + build -> dist/
 scripts/lib/            front matter, markdown, text rules, graph layout, page and svg builders
 scripts/test.mjs        build tests (node --test scripts/test.mjs)
+scripts/make-samples.mjs  builds N fictional POVs into _samples/ (git-ignored) to preview the graph at scale
 scripts/serve.mjs       local preview, 127.0.0.1 only
 CONTRIBUTING.md         how to add a POV
 .github/workflows/      pages.yml

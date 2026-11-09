@@ -16,15 +16,19 @@ function mulberry32(seed) {
   };
 }
 
-const CHARGE = { topic: 6, pov: 2, doc: 0.5 };
-const REST = { parent: 55, link: 75, topic: 28, related: 42, doc: 11 };
+// Tuned on a 36-POV, 10-topic sample (scripts/make-samples.mjs): strong topic
+// repulsion and long topic-to-topic springs keep topic labels apart.
+const CHARGE = { topic: 90, pov: 2, doc: 0.5 };
+const REST = { parent: 100, link: 95, topic: 80, related: 70, doc: 11 };
 
 /**
  * @param {Array<{id:string, kind:'topic'|'pov'|'doc'}>} nodes
  * @param {Array<{s:string, t:string, k:string}>} edges
  * @returns {Map<string,{x:number,y:number,z:number}>}
  */
-export function computeLayout(nodes, edges, { seed = 20261106, iterations = 600, radius = 100 } = {}) {
+export function computeLayout(nodes, edges, { seed = 20261106, iterations = 600, radius = 100, rest: restOverride, charge: chargeOverride } = {}) {
+  const CH = { ...CHARGE, ...chargeOverride };
+  const RS = { ...REST, ...restOverride };
   const ids = nodes.map((n) => n.id).sort();
   const n = ids.length;
   const result = new Map();
@@ -33,7 +37,7 @@ export function computeLayout(nodes, edges, { seed = 20261106, iterations = 600,
 
   const index = new Map(ids.map((id, i) => [id, i]));
   const kindOf = ids.map((id) => nodes.find((x) => x.id === id).kind);
-  const q = kindOf.map((k) => CHARGE[k] ?? 1);
+  const q = kindOf.map((k) => CH[k] ?? 1);
   const rand = mulberry32(seed);
 
   const px = new Float64Array(n), py = new Float64Array(n), pz = new Float64Array(n);
@@ -49,7 +53,7 @@ export function computeLayout(nodes, edges, { seed = 20261106, iterations = 600,
 
   const links = edges
     .filter((e) => index.has(e.s) && index.has(e.t))
-    .map((e) => ({ a: index.get(e.s), b: index.get(e.t), rest: REST[e.k] ?? 40 }));
+    .map((e) => ({ a: index.get(e.s), b: index.get(e.t), rest: RS[e.k] ?? 40 }));
 
   const fx = new Float64Array(n), fy = new Float64Array(n), fz = new Float64Array(n);
   for (let it = 0; it < iterations; it++) {

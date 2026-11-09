@@ -394,3 +394,59 @@ test('every ES import in the browser code resolves to a file that exists', () =>
   }
   assert.ok(seen.length > 15);
 });
+
+// ------------------------------------------------------------ sample content
+
+import { writeSamples } from './make-samples.mjs';
+
+test('120 generated sample POVs build, with distinct finite positions and a quick layout', () => {
+  const root = mkdtempSync(join(tmpdir(), 'pov-scale-'));
+  made.push(root);
+  cpSync(join(repo, 'site'), join(root, 'site'), { recursive: true });
+  writeSamples(root, { count: 120, seed: 3 });
+  const started = Date.now();
+  const r = run(root);
+  assert.equal(r.code, 0, r.all);
+  assert.ok(Date.now() - started < 30000, 'build took longer than 30 seconds');
+  const g = JSON.parse(readFileSync(join(root, 'dist/data/graph.json'), 'utf8'));
+  assert.equal(g.nodes.filter((n) => n.kind === 'pov').length, 120);
+  const seen = new Set();
+  for (const n of g.nodes) {
+    assert.ok([n.x, n.y, n.z].every(Number.isFinite), n.id);
+    assert.ok(Math.hypot(n.x, n.y, n.z) <= 100.01, `${n.id} is outside the layout radius`);
+    const key = `${n.x},${n.y},${n.z}`;
+    assert.ok(!seen.has(key), `${n.id} sits exactly on another node`);
+    seen.add(key);
+  }
+  const topics = g.nodes.filter((n) => n.kind === 'topic');
+  let closest = Infinity;
+  for (let i = 0; i < topics.length; i++) for (let j = i + 1; j < topics.length; j++) {
+    closest = Math.min(closest, Math.hypot(topics[i].x - topics[j].x, topics[i].y - topics[j].y, topics[i].z - topics[j].z));
+  }
+  assert.ok(closest > 30, `topic nodes are only ${closest.toFixed(1)} apart`);
+});
+
+test('sample content is clearly fictional and never reaches the real povs/ folder', () => {
+  const root = mkdtempSync(join(tmpdir(), 'pov-fiction-'));
+  made.push(root);
+  writeSamples(root, { count: 5 });
+  const text = readFileSync(join(root, 'povs/sample-1/pov.md'), 'utf8');
+  assert.match(text, /fictional sample/);
+  assert.match(readFileSync(join(root, 'povs/topics.json'), 'utf8'), /SAMPLE TEXT/);
+});
+
+test('make-samples refuses an output folder that could hold real content', () => {
+  const script = join(repo, 'scripts', 'make-samples.mjs');
+  const listing = () => readdirSync(join(repo, 'povs'), { recursive: true }).sort().join('|');
+  const before = listing();
+  for (const bad of ['povs', 'site', '..', '../elsewhere', '.', 'scripts']) {
+    const r = spawnSync(process.execPath, [script, '--out', bad], { encoding: 'utf8' });
+    assert.equal(r.status, 1, `--out ${bad} was accepted`);
+    assert.match(r.stderr, /--out must be a folder directly inside the project/);
+  }
+  for (const bad of ['0', '501', 'abc', '2.5']) {
+    const r = spawnSync(process.execPath, [script, '--count', bad], { encoding: 'utf8' });
+    assert.equal(r.status, 1, `--count ${bad} was accepted`);
+  }
+  assert.equal(listing(), before, 'povs/ changed');
+});

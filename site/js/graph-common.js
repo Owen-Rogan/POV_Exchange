@@ -120,19 +120,31 @@ export function createLabels(stage, model) {
     el.className = 'hero-label';
     el.textContent = n.label;
     layer.append(el);
-    items.push({ i, el, key: '' });
+    items.push({ i, el, key: '', w: 0, h: 0, topicSize: n.n ?? 0 });
   });
   stage.append(layer);
+  // Busiest topics win when two labels would overlap; ties keep a stable order.
+  const byPriority = [...items].sort((a, b) => b.topicSize - a.topicSize || a.i - b.i);
+  const GAP = 4; // pixels of breathing room between labels
   return {
     /** screen[i] = { x, y, r, a } in CSS pixels; a is 0..1 opacity. */
     update(screen) {
-      for (const it of items) {
+      const placed = [];
+      for (const it of byPriority) {
         const s = screen[it.i];
-        const key = s && s.a > 0.02 ? `${Math.round(s.x)},${Math.round(s.y + s.r + 4)},${s.a.toFixed(2)}` : 'off';
+        let key = 'off';
+        if (s && s.a > 0.02) {
+          if (!it.w) { it.w = it.el.offsetWidth; it.h = it.el.offsetHeight; } // measured once, after first layout
+          const x = Math.round(s.x), y = Math.round(s.y + s.r + 4);
+          const box = { x0: x - it.w / 2 - GAP, x1: x + it.w / 2 + GAP, y0: y - GAP, y1: y + it.h + GAP };
+          const clash = placed.some((p) => box.x0 < p.x1 && p.x0 < box.x1 && box.y0 < p.y1 && p.y0 < box.y1);
+          if (!clash) { placed.push(box); key = `${x},${y},${s.a.toFixed(2)}`; }
+        }
         if (key === it.key) continue;
         it.key = key;
         if (key === 'off') { it.el.style.opacity = '0'; continue; }
-        it.el.style.transform = `translate(${Math.round(s.x)}px, ${Math.round(s.y + s.r + 4)}px) translateX(-50%)`;
+        const [x, y] = key.split(',');
+        it.el.style.transform = `translate(${x}px, ${y}px) translateX(-50%)`;
         it.el.style.opacity = s.a.toFixed(2);
       }
     },
