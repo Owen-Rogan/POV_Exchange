@@ -3,7 +3,7 @@ title: Write a short, specific title
 summary: One or two sentences shown on cards and in the graph (max 240 characters).
 type: pov
 status: draft
-topics: [replace-with-a-topic-id]
+topics: [replace-with-a-topic-id]   # the first topic is the main one; add others after it, e.g. [agents, governance]
 author: First Last
 date: 2026-01-31
 # documents: ["Deck title | https://your-team.sharepoint.com/... or a Box or OneDrive share link"]

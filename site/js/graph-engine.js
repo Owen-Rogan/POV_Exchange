@@ -10,7 +10,7 @@ import {
 } from './camera.js';
 import { bindControls } from './controls.js';
 import {
-  clamp, computeTargets, createLabelLayer, createTip, damp, diameter, introDelays, labelBox, nearest, nodePixels, readPalette,
+  clamp, computeTargets, createLabelLayer, createTip, damp, diameter, edgeReveal, introDelays, labelBox, nearest, nodePixels, readPalette,
 } from './graph-common.js';
 import { neighbourSet } from './graph-data.js';
 import { chooseLabels } from './labels.js';
@@ -47,6 +47,10 @@ export function createEngine(stage, model, makePainter, hooks = {}) {
   const showGoal = new Float32Array(N).fill(1);
   const edgeLight = new Float32Array(E);
   const edgeShow = new Float32Array(E).fill(1);
+  const edgeReveal0 = edgeReveal(model, null);
+  const edgeRevealNow = new Float32Array(E); // eased 0..1, so a revealed line fades in and out
+  edgeRevealNow.set(edgeReveal0);
+  let reveal = edgeReveal0;
   let targets = computeTargets(model, state);
   let targetsDirty = true;
 
@@ -138,10 +142,11 @@ export function createEngine(stage, model, makePainter, hooks = {}) {
     recomputeBase();
     if (frame) go(frameGoal());
   }
-  function setInsets({ right = 0, bottom = 0 } = {}) {
-    view.insetX = right;
+  /** Pixels taken by panels. The centre of attention moves to the middle of what is left clear. */
+  function setInsets({ left = 0, right = 0, bottom = 0 } = {}) {
+    view.insetX = left + right;
     view.insetY = bottom;
-    shiftGoal.x = -right / 2;
+    shiftGoal.x = (left - right) / 2;
     shiftGoal.y = -bottom / 2;
     if (reduced) { view.shiftX = shiftGoal.x; view.shiftY = shiftGoal.y; }
   }
@@ -170,6 +175,7 @@ export function createEngine(stage, model, makePainter, hooks = {}) {
     focusNode: (id) => { hooks.onSelect?.(id); },
     reset: () => resetView(),
     frame: () => frameAll(),
+    dragMode: () => hooks.dragMode?.() ?? 'turn',
     interact() { idleSince = time; hooks.onInteract?.(); },
   });
 
@@ -192,7 +198,7 @@ export function createEngine(stage, model, makePainter, hooks = {}) {
     time += dt;
 
     // brightness and visibility ease toward their targets
-    if (targetsDirty) { targets = computeTargets(model, state); targetsDirty = false; }
+    if (targetsDirty) { targets = computeTargets(model, state); reveal = edgeReveal(model, targets.active); targetsDirty = false; }
     const k = damp(9, dt);
     const ks = damp(reduced ? 60 : 5, dt);
     for (let i = 0; i < N; i++) {
@@ -205,7 +211,9 @@ export function createEngine(stage, model, makePainter, hooks = {}) {
       const d = targets.edges[i] - edgeLight[i];
       edgeLight[i] += Math.abs(d) < 0.002 ? d : d * k;
       const [a, b] = edgeEnds[i];
-      edgeShow[i] = Math.min(nodeShow[a], nodeShow[b]);
+      const r = reveal[i] - edgeRevealNow[i];
+      edgeRevealNow[i] += Math.abs(r) < 0.003 ? r : r * k;
+      edgeShow[i] = Math.min(nodeShow[a], nodeShow[b]) * edgeRevealNow[i];
     }
 
     // camera: fly-to, slow turn when idle, panel offset
@@ -285,7 +293,10 @@ export function createEngine(stage, model, makePainter, hooks = {}) {
     setSelected, setHover, setFocus, setVisible, setInsets, flyToNodes, focusOn,
     frame: frameAll,
     reset: resetView,
-    zoomBy: (factor) => zoomAt(cam, view, factor, view.width / 2 + view.shiftX, view.height / 2 + view.shiftY),
+    zoomBy(factor) {
+      zoomAt(cam, view, factor, view.width / 2 + view.shiftX, view.height / 2 + view.shiftY);
+      idleSince = time;
+    },
     setBusy(on) { busy = Boolean(on); if (!on) idleSince = time; },
     resize,
     destroy() {

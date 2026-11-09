@@ -1,13 +1,19 @@
 // The Graph page: starts the engine at the right tier and connects it to the
-// toolbar, the search and topic filters, the sample switch, the timeline, the
-// guided tour, the reader panel and the URL.
+// toolbar, the side browser (search, switches, topics and POVs), the movement
+// buttons, the timeline, the guided tour, the reader panel and the URL.
 //
 // URL hash (kept in step as you explore, so every view can be shared):
-//   #n=p:some-slug     the selected node         #t=agents   topic filter
+//   #n=p:some-slug     the selected node         #t=agents   select that topic
 //   #q=text            search                     #samples=0  samples hidden
 //   #drafts=1          drafts shown               #terms=1    glossary terms shown
 // Selecting a node adds a history entry, so Back steps through your hops.
+//
+// Two panels can sit beside the graph: the browser on the left and the reader on
+// the right. Below 1200px wide only one is open at a time, and on a phone they
+// are bottom sheets.
 
+import { browseTree } from './browse-model.js';
+import { createBrowser } from './browse.js';
 import { applyFilters, focusSet } from './graph-filter.js';
 import { withIndex } from './graph-data.js';
 import { paramsFromPrefs, prefsFromParams, readHashParams, savePref } from './prefs.js';
@@ -17,6 +23,9 @@ import { pickTier } from './tier.js';
 import { stepIndex, tourSteps } from './tour.js';
 
 const MAX_QUERY = 100;
+const BROWSE_WIDTH = 300; // keep in step with .browse in styles.css
+const GAP = 12; // the space between a panel and the edge of the graph
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
 async function getJson(path) {
   const res = await fetch(path);
@@ -35,10 +44,11 @@ export async function initGraphPage() {
   root.dataset.reduced = picked.reduced ? '1' : '0';
 
   const $ = (sel) => root.querySelector(sel);
-  const bar = $('.gp-bar');
-  const searchBox = $('.gp-search');
+  const browsePanel = $('#browse');
+  const browseBtn = $('[data-act="browse"]');
+  const nav = $('.gp-nav');
   const input = $('#g-q');
-  const chipList = $('.gp-chips');
+  const plain = document.querySelector('#plain');
   const sampleLabel = $('.switch-samples');
   const draftLabel = $('.switch-drafts');
   const termLabel = $('.switch-terms');
@@ -85,7 +95,7 @@ export async function initGraphPage() {
   let timeline = makeTimeline([]);
 
   // ------------------------------------------------------------- state
-  const state = { q: '', topic: '', ...prefsFromParams(new URLSearchParams()), terms: false, until: null, selected: null };
+  const state = { q: '', ...prefsFromParams(new URLSearchParams()), terms: false, until: null, selected: null, browse: false, drag: 'turn' };
   const history = []; // ids visited by hopping, for the reader's Back button
   const bodies = new Map();
   let engine = null;
@@ -121,7 +131,6 @@ export async function initGraphPage() {
   function writeHash({ push = false } = {}) {
     const p = new URLSearchParams();
     if (state.selected) p.set('n', state.selected);
-    if (state.topic) p.set('t', state.topic);
     if (state.q) p.set('q', state.q);
     paramsFromPrefs(p, state);
     if (state.terms) p.set('terms', '1');
@@ -134,23 +143,19 @@ export async function initGraphPage() {
   // ------------------------------------------------------------- filters
   function refresh({ frame = false } = {}) {
     result = applyFilters(model, povBySlug, topicById, {
-      q: state.q, topic: state.topic, samples: state.samples, drafts: state.drafts, terms: state.terms, until: state.until,
+      q: state.q, topic: '', samples: state.samples, drafts: state.drafts, terms: state.terms, until: state.until,
     });
     if (engine) {
       engine.setVisible(result.visible, { frame });
       engine.setFocus(focusSet(model, result));
     }
-    const shown = result.counts.pov;
-    const total = model.nodes.filter((n, i) => n.kind === 'pov' && (state.samples || !n.sample) && (state.drafts || n.status !== 'draft')).length;
-    count.textContent = result.active ? `${matchedPovCount()} of ${total} POVs` : `${shown} ${shown === 1 ? 'POV' : 'POVs'}`;
-    for (const b of chipList.querySelectorAll('.chip')) b.setAttribute('aria-pressed', String(b.dataset.topic === state.topic));
-    for (const b of chipList.querySelectorAll('.chip')) b.hidden = isHidden(`t:${b.dataset.topic}`) && b.dataset.topic !== state.topic;
+    const tree = browseTree(model, povBySlug, data.topics, topicById, result);
+    count.textContent = result.active ? `${tree.shown} of ${plural(tree.total, 'POV', 'POVs')}` : plural(tree.total, 'POV', 'POVs');
+    browser.render(tree, result.active
+      ? (tree.shown ? `${tree.shown} of ${plural(tree.total, 'POV', 'POVs')} match` : 'No POVs match')
+      : 'Pick a topic to see its POVs, or search.');
+    browser.setCurrent(state.selected, { reveal: false });
     if (state.selected && isHidden(state.selected)) select(null);
-  }
-  function matchedPovCount() {
-    let n = 0;
-    model.nodes.forEach((node, i) => { if (node.kind === 'pov' && result.visible[i] && result.matched[i]) n += 1; });
-    return n;
   }
 
   // ------------------------------------------------------------- selection
@@ -161,41 +166,63 @@ export async function initGraphPage() {
     const changed = state.selected !== id;
     state.selected = id;
     engine?.setSelected(id);
+    browser.setCurrent(id);
     if (!id) {
       reader.hide();
-      engine?.setInsets({});
     } else {
-      engine?.setInsets(readerInsets());
+      // Below 1200px there is room for one panel: the reader takes over from the browser.
+      if (!roomForBoth() && state.browse) setBrowse(false, { quiet: true });
       reader.show(id, { moveFocus: !fromUrl, canGoBack: history.length > 0 });
     }
     root.classList.toggle('has-reader', Boolean(id));
+    applyInsets();
     if (!fromUrl && changed) writeHash({ push: Boolean(id) });
   }
-  function readerInsets() {
-    const wide = window.matchMedia('(min-width: 900px)').matches;
-    return wide ? { right: Math.min(440, window.innerWidth * 0.4) } : { bottom: Math.round(window.innerHeight * 0.46) };
+
+  // ------------------------------------------------------------- panels
+  const roomForBoth = () => window.matchMedia('(min-width: 1200px)').matches;
+  const isPhone = () => !window.matchMedia('(min-width: 900px)').matches;
+
+  /** Tell the camera how much of the graph the open panels cover, so what you pick stays in the clear middle. */
+  function applyInsets() {
+    if (!engine) return;
+    if (isPhone()) {
+      const sheet = state.selected || state.browse;
+      engine.setInsets(sheet ? { bottom: Math.round(window.innerHeight * 0.46) } : {});
+      return;
+    }
+    engine.setInsets({
+      left: state.browse ? BROWSE_WIDTH + GAP : 0,
+      right: state.selected ? Math.min(440, window.innerWidth * 0.4) + GAP : 0,
+    });
   }
+
+  function setBrowse(open, { quiet = false, focus = false } = {}) {
+    state.browse = open;
+    browsePanel.hidden = !open;
+    root.classList.toggle('has-browse', open);
+    browseBtn.setAttribute('aria-expanded', String(open));
+    browseBtn.setAttribute('aria-pressed', String(open));
+    if (open && !roomForBoth() && state.selected && !quiet) select(null); // one panel at a time
+    // Focus the search box where there is a keyboard to type on. On a phone that would raise the on-screen
+    // keyboard over the list, so focus the list itself instead (keyboard and screen-reader users still land in it).
+    if (open && focus) (isPhone() ? browsePanel.querySelector('.browse-body') : input).focus({ preventScroll: true });
+    applyInsets();
+  }
+  browseBtn.addEventListener('click', () => setBrowse(!state.browse, { focus: true }));
+  browsePanel.querySelector('.browse-close').addEventListener('click', () => { setBrowse(false); browseBtn.focus(); });
+
+  const browser = createBrowser(browsePanel, {
+    model, povBySlug,
+    onPick: (id) => {
+      if (tour) stopTour();
+      if (id === state.selected) { engine?.focusOn(id); return; }
+      select(id, { hop: Boolean(state.selected) });
+    },
+    onHover: (id) => engine?.setHover(id && model.byId.has(id) && !isHidden(id) ? id : null),
+  });
 
   // ------------------------------------------------------------- controls
-  function buildChips() {
-    for (const t of data.topics) {
-      const li = document.createElement('li');
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'chip';
-      b.dataset.topic = t.id;
-      b.textContent = t.title;
-      b.setAttribute('aria-pressed', 'false');
-      b.addEventListener('click', () => {
-        state.topic = state.topic === t.id ? '' : t.id;
-        writeHash();
-        refresh({ frame: true });
-      });
-      li.append(b);
-      chipList.append(li);
-    }
-  }
-
   let queued = 0;
   input.addEventListener('input', () => {
     clearTimeout(queued);
@@ -206,7 +233,7 @@ export async function initGraphPage() {
     }, 140);
   });
   input.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Escape') { if (input.value) { input.value = ''; state.q = ''; writeHash(); refresh({ frame: true }); } input.blur(); stage.focus(); }
+    if (ev.key === 'Escape') { if (input.value) { input.value = ''; state.q = ''; writeHash(); refresh({ frame: true }); } else { input.blur(); stage.focus(); } }
   });
 
   sampleSwitch.checked = state.samples;
@@ -222,18 +249,57 @@ export async function initGraphPage() {
     writeHash();
     rebuildTimeline();
     refresh({ frame: true });
+    syncPlainList();
   };
   for (const s of [sampleSwitch, draftSwitch, termSwitch]) s.addEventListener('change', onSwitch);
+
+  /** The plain list at the foot of the page follows the same two switches (the way the Library does). */
+  function syncPlainList() {
+    if (!plain) return;
+    const eligible = (e) => (state.samples || e.dataset.sample !== '1') && (state.drafts || e.dataset.status !== 'draft');
+    for (const row of plain.querySelectorAll('.row')) row.hidden = !eligible(row);
+    for (const g of plain.querySelectorAll('.pl-topic')) {
+      const rows = [...g.querySelectorAll('.row')];
+      const live = rows.filter((r) => !r.hidden).length;
+      g.hidden = (g.dataset.sample === '1' && !state.samples) || (rows.length > 0 && live === 0);
+      const c = g.querySelector('summary .count-s');
+      if (c && !g.classList.contains('pl-terms')) c.textContent = plural(live, 'POV', 'POVs');
+    }
+    const termGroup = plain.querySelector('.pl-terms');
+    if (termGroup) termGroup.hidden = !state.terms || termGroup.querySelectorAll('.row:not([hidden])').length === 0;
+  }
 
   tools.addEventListener('click', (ev) => {
     const b = ev.target instanceof Element ? ev.target.closest('[data-act]') : null;
     if (!b) return;
     const act = b.dataset.act;
-    if (act === 'frame') engine?.frame();
-    else if (act === 'reset') { engine?.reset(); }
-    else if (act === 'tour') toggleTour();
+    if (act === 'tour') toggleTour();
     else if (act === 'fullscreen') toggleFullscreen();
   });
+
+  // Zoom in and out, back to the whole graph, what a drag does, and the how-to hint.
+  nav.addEventListener('click', (ev) => {
+    const b = ev.target instanceof Element ? ev.target.closest('[data-act], [data-mode]') : null;
+    if (!b) return;
+    if (b.dataset.mode) { setDragMode(b.dataset.mode); return; }
+    const act = b.dataset.act;
+    if (tour) stopTour();
+    if (act === 'zoom-in') engine?.zoomBy(0.8);
+    else if (act === 'zoom-out') engine?.zoomBy(1.25);
+    else if (act === 'home') { select(null); engine?.reset(); }
+    else if (act === 'help') toggleHelp();
+  });
+  function setDragMode(mode) {
+    state.drag = mode === 'move' ? 'move' : 'turn';
+    for (const b of nav.querySelectorAll('[data-mode]')) b.setAttribute('aria-pressed', String(b.dataset.mode === state.drag));
+    stage.classList.toggle('mode-move', state.drag === 'move');
+  }
+  function toggleHelp() {
+    const on = help.hidden || help.classList.contains('fade');
+    help.hidden = false;
+    help.classList.toggle('fade', !on);
+    nav.querySelector('[data-act="help"]').setAttribute('aria-pressed', String(on));
+  }
 
   function toggleFullscreen() {
     if (document.fullscreenElement) { document.exitFullscreen?.(); return; }
@@ -343,6 +409,7 @@ export async function initGraphPage() {
       reduced: picked.reduced,
       onSelect: (id) => { if (tour) stopTour(); select(id, { hop: Boolean(id) && Boolean(state.selected) }); },
       onInteract: () => { if (tour) stopTour(); },
+      dragMode: () => state.drag,
       onLost: () => { engine?.destroy(); engine = null; startLite(); },
     };
     async function startLite() {
@@ -369,13 +436,13 @@ export async function initGraphPage() {
   function mount(e) {
     engine = e;
     root.dataset.tier = e.kind;
-    e.canvas.tabIndex = -1;
+    e.canvas.removeAttribute('tabindex'); // the stage is the one focus target; the canvas is hidden from assistive technology
     stage.tabIndex = 0;
     stage.setAttribute('role', 'application');
     stage.setAttribute('aria-label', 'Knowledge graph. Drag to turn, scroll to zoom, arrow keys to turn, plus and minus to zoom, F to fit, 0 to reset.');
+    applyInsets(); // before the first framing, so the picture centres on the space the panels leave clear
     refresh({ frame: true });
     engine.setSelected(state.selected, { fly: true });
-    if (state.selected) engine.setInsets(readerInsets());
     // Fade the canvas in once it has drawn a frame. A timer is the fallback for a browser that is
     // holding animation frames back (an unfocused window), so the poster never lingers over a live graph.
     const goLive = () => stage.classList.add('live');
@@ -384,22 +451,21 @@ export async function initGraphPage() {
   }
 
   // ------------------------------------------------------------- reveal the controls, then read the URL
-  searchBox.hidden = false;
-  chipList.hidden = false;
+  browseBtn.hidden = false;
   tools.hidden = false;
+  nav.hidden = false;
   legend.hidden = false;
   help.hidden = false;
   legend.querySelector('.lg-draft').hidden = !hasDrafts;
   sampleLabel.hidden = !hasSamples;
   draftLabel.hidden = !hasDrafts;
   termLabel.hidden = !hasTerms;
-  buildChips();
-  setTimeout(() => { help.classList.add('fade'); }, 7000);
+  setBrowse(roomForBoth() && !isPhone(), { quiet: true }); // open by default where there is room
+  setTimeout(() => { help.classList.add('fade'); nav.querySelector('[data-act="help"]').setAttribute('aria-pressed', 'false'); }, 7000);
+  nav.querySelector('[data-act="help"]').setAttribute('aria-pressed', 'true');
 
   function fromHash({ initial = false } = {}) {
     const p = readHashParams();
-    const t = p.get('t') ?? '';
-    state.topic = topicById.has(t) ? t : '';
     state.q = (p.get('q') ?? '').slice(0, MAX_QUERY);
     input.value = state.q;
     Object.assign(state, prefsFromParams(p));
@@ -409,19 +475,30 @@ export async function initGraphPage() {
     termSwitch.checked = state.terms;
     legend.querySelector('.lg-term').hidden = !state.terms;
     rebuildTimeline();
+    syncPlainList();
     refresh({ frame: initial || true });
+    // #n= picks a node. A bare #t=agents picks that topic (older links used it as a filter).
     const n = p.get('n');
-    select(n && model.byId.has(n) ? n : null, { fromUrl: true });
+    const t = p.get('t');
+    const wanted = n && model.byId.has(n) ? n : (t && model.byId.has(`t:${t}`) ? `t:${t}` : null);
+    select(wanted, { fromUrl: true });
   }
   window.addEventListener('popstate', () => fromHash());
+  window.addEventListener('resize', () => {
+    // Crossing below 1200px with both panels open: keep the one you were last using (the reader).
+    if (!roomForBoth() && state.browse && state.selected) setBrowse(false, { quiet: true });
+    applyInsets();
+  });
   window.addEventListener('keydown', (ev) => {
     if (ev.defaultPrevented || ev.altKey || ev.ctrlKey || ev.metaKey) return;
     const typing = ev.target instanceof Element && ev.target.closest('input, textarea, select');
     if (ev.key === 'Escape' && !typing) {
       if (tour) stopTour();
       else if (state.selected) select(null);
+      else if (state.browse && !roomForBoth()) setBrowse(false);
     } else if (ev.key === '/' && !typing) {
       ev.preventDefault();
+      if (!state.browse) setBrowse(true);
       input.focus();
       input.select();
     }

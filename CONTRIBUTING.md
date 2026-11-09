@@ -46,7 +46,7 @@ While the site is being shaped, `povs/samples/` holds 120 **fictional** POVs and
 
 ## Topics
 
-Every POV must use topics from [`povs/topics.json`](povs/topics.json). To propose a new topic, change that file in the same pull request. Topics carry the house view that appears at the top of each section, so a new topic needs a one-line view from the practice. Topics marked `"sample": true` exist only for the sample POVs and disappear from the site on their own once the samples are deleted.
+Every POV must use topics from [`povs/topics.json`](povs/topics.json). **List the topic it belongs to most first.** That main topic decides where the POV sits in the graph (next to that topic) and which group it is listed under in the graph's browser; any other topics show as small chips and as lines you see when you select the POV. To propose a new topic, change that file in the same pull request. Topics carry the house view that appears at the top of each section, so a new topic needs a one-line view from the practice. Topics marked `"sample": true` exist only for the sample POVs and disappear from the site on their own once the samples are deleted.
 
 ## If the check fails
 

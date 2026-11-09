@@ -52,6 +52,21 @@ export function introDelays(model) {
   return Float32Array.from(model.nodes, (n) => Math.min(start[n.kind] + step[n.kind] * count[n.kind]++, 2.4));
 }
 
+/** Edge kinds that stay out of sight until one end is the selected or hovered node. */
+export const QUIET_EDGES = new Set(['link2', 'term']);
+
+/**
+ * Which edges are drawn at all: 1 shows, 0 hides. The picture is calm by default, with the lines that carry
+ * the structure (topic to topic, each POV to its main topic, documents, related POVs). A POV's other topics
+ * and its glossary terms are drawn only for the node you have selected or are pointing at, so the lines
+ * explain the one thing you are looking at instead of crossing everything.
+ * @param {object} model   from withIndex()
+ * @param {string|null} active  the selected or hovered node id
+ */
+export function edgeReveal(model, active) {
+  return Uint8Array.from(model.edges, (e) => (!QUIET_EDGES.has(e.k) || (active !== null && (e.s === active || e.t === active)) ? 1 : 0));
+}
+
 /**
  * Target brightness per node and edge: 1 lit, 0 normal, -1 dimmed.
  * `hover` beats `selected`; `focus` (a Set of node ids, or null) is the search/topic filter.

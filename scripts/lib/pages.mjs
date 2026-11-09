@@ -4,8 +4,8 @@
 
 import { constellationSvg } from './constellation.mjs';
 import { hostLabel } from './doc-links.mjs';
+import { egoHtml } from './ego.mjs';
 import { esc } from './html.mjs';
-import { graphSvg, neighbourhood } from './svg.mjs';
 
 export const CSP = [
   "default-src 'none'",
@@ -128,10 +128,82 @@ function citeHtml(p, config) {
 </details>`;
 }
 
+// ------------------------------------------------- where this POV sits
+
+const SITS_TOPICS = 4; // shown in the diagram; the text list below shows them all
+const SITS_RELATED = 5;
+const SITS_TERMS = 5;
+const SITS_SAME = 5; // "More on these topics" in the text list
+
+const newestFirst = (a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : a.slug < b.slug ? -1 : 1);
+
+/** Everything one POV connects to, worked out once and used by both the diagram and the text lists. */
+export function connectionsOf(p, ctx, up) {
+  const all = [...ctx.povBySlug.values()];
+  const link = (o) => ({ slug: o.slug, label: o.title, href: `../${o.slug}/`, draft: o.status === 'draft', sample: Boolean(o.sample) });
+
+  const topics = p.topics.map((id) => ({ id, label: ctx.topicById.get(id).title, href: `${up}#topic-${id}` }));
+
+  // Related works both ways: a POV this one lists, and a POV that lists this one.
+  const relSlugs = new Set(p.related);
+  for (const o of all) if (o.related.includes(p.slug)) relSlugs.add(o.slug);
+  const related = [...relSlugs].map((s) => ctx.povBySlug.get(s)).filter(Boolean).sort(newestFirst);
+
+  const mine = new Set(p.topics);
+  const same = all
+    .filter((o) => o.slug !== p.slug && !relSlugs.has(o.slug) && o.topics.some((t) => mine.has(t)))
+    .sort(newestFirst);
+
+  const terms = (ctx.glossary ?? [])
+    .filter((g) => g.uses.includes(p.slug))
+    .map((g) => ({ slug: g.slug, label: g.term, href: `${up}glossary/#${g.slug}`, sample: Boolean(g.sample) }));
+
+  return { topics, related: related.map(link), same: same.map(link), terms };
+}
+
+const tags = (x) => `${x.sample ? ' <span class="tag">Sample</span>' : ''}${x.draft ? ' <span class="status draft">Draft</span>' : ''}`;
+
+/** The "Where this sits" section: the diagram, then the same connections as plain, grouped lists. */
+function sitsHtml(p, ctx, up) {
+  const c = connectionsOf(p, ctx, up);
+  const empty = !c.topics.length && !c.related.length && !c.terms.length;
+  if (empty) return '';
+
+  const diagram = egoHtml({
+    self: { label: p.title, draft: p.status === 'draft' },
+    topics: c.topics.slice(0, SITS_TOPICS),
+    related: c.related.slice(0, SITS_RELATED),
+    moreRelated: Math.max(0, c.related.length - SITS_RELATED),
+    terms: c.terms.slice(0, SITS_TERMS),
+    moreTerms: Math.max(0, c.terms.length - SITS_TERMS),
+    moreHref: '#connections-list',
+  });
+
+  const group = (title, items, render) => (items.length
+    ? `<section class="sits-group"><h3>${title}</h3>\n<ul>\n${items.map((x) => `<li>${render(x)}</li>`).join('\n')}\n</ul></section>`
+    : '');
+  const link = (x) => `<a href="${esc(x.href)}">${esc(x.label)}</a>${tags(x)}`;
+  const moreSame = c.same.length - SITS_SAME;
+  const lists = [
+    group('Topics', c.topics, (x) => `<a href="${esc(x.href)}">${esc(x.label)}</a>`),
+    group('Related POVs', c.related, link),
+    group('More on these topics', c.same.slice(0, SITS_SAME), link),
+    moreSame > 0 ? `<p class="sits-more">and ${moreSame} more on these topics, in the <a href="${up}#topic-${esc(p.topics[0])}">library</a></p>` : '',
+    group('Glossary terms used', c.terms, (x) => `<a href="${esc(x.href)}">${esc(x.label)}</a>${x.sample ? ' <span class="tag">Sample</span>' : ''}`),
+  ].filter(Boolean).join('\n');
+
+  return `<aside class="sits" aria-labelledby="map-h">
+<h2 id="map-h">Where this sits</h2>
+${diagram}
+<div class="sits-lists" id="connections-list">
+${lists}
+</div>
+</aside>`;
+}
+
 export function povPage(p, ctx) {
   const up = '../../';
   const topicTitles = p.topics.map((id) => ctx.topicById.get(id).title);
-  const relatedPovs = p.related.map((s) => ctx.povBySlug.get(s));
   const minutes = Math.max(1, Math.round(words(p.blocks) / 220));
   const og = [
     '<meta property="og:type" content="article">',
@@ -148,31 +220,7 @@ ${p.documents.map((d) => `<li><a href="${esc(d.url)}" target="_blank" rel="noope
 </ul>
 </section>`
     : '';
-  const related = relatedPovs.length
-    ? `<section class="related" aria-labelledby="rel-h">
-<h2 id="rel-h">Related</h2>
-<ul>
-${relatedPovs.map((r) => `<li><a href="../${r.slug}/">${esc(r.title)}</a></li>`).join('\n')}
-</ul>
-</section>`
-    : '';
-
-  const keep = neighbourhood(ctx.graph, p.slug);
-  const map = graphSvg(ctx.graph, {
-    keep,
-    current: `p:${p.slug}`,
-    className: 'minimap-svg',
-    ariaLabel: `Where this POV sits in the knowledge graph: ${p.title}`,
-    labelKinds: new Set(['topic', 'pov']),
-    href: (n) => (n.id === `p:${p.slug}` ? null : n.kind === 'pov' ? `../${n.ref}/` : n.kind === 'topic' ? `${up}#topic-${n.ref}` : null),
-  });
-  const minimap = map
-    ? `<aside class="minimap" aria-labelledby="map-h">
-<h2 id="map-h">Where this sits</h2>
-${map}
-<p class="map-note">Topics and POVs connected to this one. Select a label to go there.</p>
-</aside>`
-    : '';
+  const sits = sitsHtml(p, ctx, up);
 
   return `<!doctype html>
 <html lang="en">
@@ -198,8 +246,7 @@ ${blocksToHtml(p.blocks)}
 ${docs}
 ${citeHtml(p, ctx.config)}
 <p class="contact">${esc(ctx.config.contactLine)}</p>
-${minimap}
-${related}
+${sits}
 <p class="back"><a href="${up}">&larr; All POVs</a></p>
 </main>
 ${footerHtml(ctx.config)}
@@ -343,28 +390,48 @@ ${chips}
 
 const provenance = (p) => `${p.sample ? ' <span class="tag">Sample</span>' : ''}${p.status === 'draft' ? ' <span class="status draft">Draft</span>' : ''}`;
 const listAttrs = (p) => `${sampleAttr(p.sample)} data-status="${p.status}"`;
+const newestFirstBy = (a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : a.slug < b.slug ? -1 : 1);
 
-/** Every node as a plain list: the accessible twin of the graph, and the page's content without JavaScript. */
+/**
+ * Every POV once, under its main topic (the first one it lists), with its other topics as small chips.
+ * It is the page's content without JavaScript and the accessible twin of the graph. Topics are collapsed
+ * (<details>), so it is a short list you open, not a wall. Documents are a single line under their POV.
+ */
 export function nodelistHtml(topics, povs, glossary = []) {
   const stats = topicStats(topics, povs);
-  const byTopic = new Map(topics.map((t) => [t.id, []]));
-  for (const p of povs) for (const id of p.topics) byTopic.get(id).push(p);
-  const docItems = (p) => p.documents.map((d, i) => `<li${listAttrs(p)}><a href="${esc(d.url)}" data-node="d:${esc(p.slug)}/${i + 1}" target="_blank" rel="noopener noreferrer">${esc(d.title)}</a> <span>(document on ${esc(hostLabel(d.host))})</span></li>`).join('');
-  const items = topics.map((t) => {
-    const ps = byTopic.get(t.id);
-    const kids = ps.length
-      ? `\n<ul>\n${ps.map((p) => `<li${listAttrs(p)}><a href="../pov/${p.slug}/" data-node="p:${p.slug}">${esc(p.title)}</a>${provenance(p)}${p.documents.length ? `<ul>${docItems(p)}</ul>` : ''}</li>`).join('\n')}\n</ul>\n`
+  const topicById = new Map(topics.map((t) => [t.id, t]));
+  const byMain = new Map(topics.map((t) => [t.id, []]));
+  for (const p of povs) byMain.get(p.topics[0])?.push(p);
+
+  const row = (p) => {
+    const others = p.topics.slice(1).map((id) => topicById.get(id)).filter(Boolean);
+    const chips = others.length ? ` <span class="also" title="Also in">${others.map((t) => `<a class="chip-s" href="../#topic-${t.id}">${esc(t.title)}</a>`).join('')}</span>` : '';
+    const docs = p.documents.length
+      ? `<span class="row-docs">${p.documents.map((d, i) => `<a href="${esc(d.url)}" data-node="d:${esc(p.slug)}/${i + 1}" target="_blank" rel="noopener noreferrer">${esc(d.title)}</a> <span class="host">${esc(hostLabel(d.host))}</span>`).join(' &middot; ')}</span>`
       : '';
+    return `<li class="row"${listAttrs(p)}><a class="row-title" href="../pov/${p.slug}/" data-node="p:${p.slug}">${esc(p.title)}</a>${provenance(p)}${chips}${docs}</li>`;
+  };
+
+  const groups = topics.map((t) => {
+    const ps = byMain.get(t.id).sort(newestFirstBy);
     const n = stats.get(t.id);
-    return `<li${sampleAttr(n.sampleOnly)}><a href="../#topic-${t.id}" data-node="t:${t.id}">${esc(t.title)}</a> <span>(${plural(n.all, 'POV', 'POVs')})</span>${kids}</li>`;
+    return `<details class="pl-topic"${sampleAttr(n.sampleOnly)}>
+<summary><a href="../#topic-${t.id}" data-node="t:${t.id}">${esc(t.title)}</a> <span class="count-s">${plural(ps.length, 'POV', 'POVs')}</span></summary>
+${ps.length ? `<ul class="pl-rows">\n${ps.map(row).join('\n')}\n</ul>` : '<p class="empty">No POVs on this topic yet.</p>'}
+</details>`;
   }).join('\n');
+
   const terms = glossary.length
-    ? `\n<h3 class="list-h">Glossary terms</h3>\n<ul class="terms-list">\n${glossary.map((g) => `<li${sampleAttr(g.sample)}><a href="../glossary/#${g.slug}" data-node="g:${g.slug}">${esc(g.term)}</a> <span>(used in ${plural(g.uses.length, 'POV', 'POVs')})</span>${g.sample ? ' <span class="tag">Sample</span>' : ''}</li>`).join('\n')}\n</ul>`
+    ? `\n<details class="pl-topic pl-terms">
+<summary>Glossary terms <span class="count-s">${plural(glossary.length, 'term', 'terms')}</span></summary>
+<ul class="pl-rows">
+${glossary.map((g) => `<li class="row"${sampleAttr(g.sample)}><a class="row-title" href="../glossary/#${g.slug}" data-node="g:${g.slug}">${esc(g.term)}</a>${g.sample ? ' <span class="tag">Sample</span>' : ''} <span class="count-s">used in ${plural(g.uses.length, 'POV', 'POVs')}</span></li>`).join('\n')}
+</ul>
+</details>`
     : '';
-  return `<nav class="nodelist" id="nodelist" aria-label="Knowledge graph as a list">
-<ul>
-${items}
-</ul>${terms}
+
+  return `<nav class="nodelist" id="nodelist" aria-label="Everything in the knowledge graph, as a plain list">
+${groups}${terms}
 </nav>`;
 }
 

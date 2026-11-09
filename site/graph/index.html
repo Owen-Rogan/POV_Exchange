@@ -20,22 +20,33 @@
 </div>
 
 <div class="gp-bar" role="toolbar" aria-label="Graph controls">
-<div class="gp-search search" hidden>
-<label for="g-q">Search the graph</label>
-<input id="g-q" type="search" autocomplete="off" spellcheck="false" maxlength="100" placeholder="Search  ( / )">
-</div>
-<ul class="gp-chips chips" aria-label="Filter by topic" hidden></ul>
-<label class="switch switch-drafts" hidden><input type="checkbox" class="draft-switch"><span>Show drafts</span></label>
-<label class="switch switch-samples" hidden><input type="checkbox" class="sample-switch" checked><span>Show samples</span></label>
-<label class="switch switch-terms" hidden><input type="checkbox" class="term-switch"><span>Show terms</span></label>
+<button type="button" class="tool tool-browse" data-act="browse" aria-expanded="false" aria-controls="browse" hidden>Browse</button>
 <div class="gp-tools" hidden>
-<button type="button" class="tool" data-act="frame" title="Fit everything in view (F)">Frame</button>
-<button type="button" class="tool" data-act="reset" title="Reset the view (0)">Reset</button>
 <button type="button" class="tool" data-act="tour" aria-pressed="false">Tour</button>
 <button type="button" class="tool" data-act="fullscreen" title="Full screen">Full screen</button>
 </div>
 <p class="gp-count count" role="status" aria-live="polite"></p>
 </div>
+
+<aside class="browse" id="browse" aria-label="Browse and search" hidden>
+<div class="browse-head">
+<div class="search">
+<label for="g-q">Search the graph</label>
+<input id="g-q" type="search" autocomplete="off" spellcheck="false" maxlength="100" placeholder="Search  ( / )">
+</div>
+<button type="button" class="browse-close" aria-label="Close the browser">Close</button>
+</div>
+<div class="browse-switches">
+<label class="switch switch-drafts" hidden><input type="checkbox" class="draft-switch"><span>Show drafts</span></label>
+<label class="switch switch-samples" hidden><input type="checkbox" class="sample-switch" checked><span>Show samples</span></label>
+<label class="switch switch-terms" hidden><input type="checkbox" class="term-switch"><span>Show terms</span></label>
+</div>
+<p class="browse-note"></p>
+<div class="browse-body" tabindex="-1"></div>
+</aside>
+
+<div class="gp-foot">
+<div class="gp-help" hidden><p>Drag to turn. Scroll or use + and &minus; to zoom. Choose Move to slide the view. Click a node to read it.</p></div>
 
 <div class="gp-legend" aria-label="Legend" hidden>
 <span><i class="dot t"></i>Topic</span>
@@ -45,8 +56,6 @@
 <span class="lg-draft"><i class="dot ring"></i>Draft</span>
 </div>
 
-<div class="gp-help" hidden><p>Drag to turn. Scroll to zoom. Right-drag or Shift-drag to move. Click a node to read it. Double-click to focus.</p></div>
-
 <div class="gp-time" hidden>
 <button type="button" class="tool" data-act="play" aria-label="Play timeline">Play</button>
 <label for="g-time">Time</label>
@@ -54,18 +63,31 @@
 <output class="gp-time-label" for="g-time"></output>
 </div>
 
-<a class="gp-listlink" href="#list">List view</a>
+<div class="gp-nav" role="group" aria-label="Move around the graph" hidden>
+<div class="seg" role="group" aria-label="What dragging does">
+<button type="button" class="seg-btn" data-mode="turn" aria-pressed="true" title="Drag to turn the graph">Turn</button>
+<button type="button" class="seg-btn" data-mode="move" aria-pressed="false" title="Drag to slide the graph">Move</button>
+</div>
+<button type="button" class="tool nav-btn" data-act="zoom-in" aria-label="Zoom in" title="Zoom in (+)">+</button>
+<button type="button" class="tool nav-btn" data-act="zoom-out" aria-label="Zoom out" title="Zoom out (-)">&minus;</button>
+<button type="button" class="tool nav-btn" data-act="home" title="Back to the whole graph (0)">Home</button>
+<button type="button" class="tool nav-btn" data-act="help" aria-label="How to use the graph" aria-pressed="false" title="How to use the graph">?</button>
+</div>
+</div>
+
 </main>
 
-<section class="gp-list" id="list" aria-labelledby="list-h">
+<section class="gp-plain" aria-labelledby="plain-h">
 <div class="page">
-<h2 id="list-h">The graph as a list</h2>
-<p class="lede">Every topic, POV and document, for reading without the animation or with a screen reader.</p>
+<details class="plain" id="plain">
+<summary id="plain-h">Plain list of everything</summary>
+<p class="lede">The same topics, POVs, documents and glossary terms as the graph, as an ordinary list for reading without the animation or with a screen reader.</p>
 <!-- build:nodelist -->
+</details>
 </div>
 </section>
 
 <!-- build:footer -->
-<noscript><p class="noscript">The interactive graph needs JavaScript. The list below it shows everything and works without it.</p></noscript>
+<noscript><p class="noscript">The interactive graph needs JavaScript. Open &ldquo;Plain list of everything&rdquo; below it to see every topic and POV; it works without it.</p></noscript>
 </body>
 </html>

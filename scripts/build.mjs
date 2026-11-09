@@ -33,7 +33,7 @@ import { DEFAULTS, validateConfig } from './lib/config.mjs';
 import { parseDocumentEntry } from './lib/doc-links.mjs';
 import { normalise, splitFrontMatter } from './lib/frontmatter.mjs';
 import { compileMatcher, markTerms, usedTerms } from './lib/glossary.mjs';
-import { computeLayout } from './lib/layout.mjs';
+import { computeClusterLayout } from './lib/layout.mjs';
 import { parseBlocks } from './lib/markdown.mjs';
 import {
   MARKERS, expandMarkers, filtersHtml, footerHtml, glossaryPageHtml, headTags, headerHtml, latestHtml,
@@ -400,7 +400,9 @@ function buildGraph(topics, povs, glossary = []) {
   }
   for (const p of povs) {
     nodes.push({ id: `p:${p.slug}`, kind: 'pov', ref: p.slug, label: p.title, date: p.date, status: p.status, ...(p.sample ? { sample: true } : {}) });
-    for (const id of p.topics) edge(`p:${p.slug}`, `t:${id}`, 'link');
+    // The first topic listed is the POV's main topic: it decides which cluster the POV sits in and shows as a
+    // short line. Its other topics are drawn as `link2`, which the graph reveals only for a selected node.
+    p.topics.forEach((id, i) => edge(`p:${p.slug}`, `t:${id}`, i === 0 ? 'link' : 'link2'));
     for (const r of p.related) edge(`p:${p.slug}`, `p:${r}`, 'related');
     p.documents.forEach((d, i) => {
       nodes.push({ id: `d:${p.slug}/${i + 1}`, kind: 'doc', ref: p.slug, label: d.title, date: p.date, status: p.status, ...(p.sample ? { sample: true } : {}) });
@@ -412,7 +414,11 @@ function buildGraph(topics, povs, glossary = []) {
     nodes.push({ id: `g:${g.slug}`, kind: 'term', ref: g.slug, label: g.term, n: g.uses.length, ...(g.sample ? { sample: true } : {}) });
     for (const slug of g.uses) edge(`g:${g.slug}`, `p:${slug}`, 'term');
   }
-  const layout = computeLayout(nodes, edges);
+  const layout = computeClusterLayout({
+    topics: topics.map((t) => ({ id: `t:${t.id}`, parent: t.parent ? `t:${t.parent}` : null, related: t.related.map((r) => `t:${r}`) })),
+    povs: povs.map((p) => ({ id: `p:${p.slug}`, topics: p.topics.map((id) => `t:${id}`), docs: p.documents.map((d, i) => `d:${p.slug}/${i + 1}`) })),
+    terms: glossary.map((g) => ({ id: `g:${g.slug}`, uses: g.uses.map((u) => `p:${u}`) })),
+  });
   const newest = povs.length ? povs[0].slug : null; // povs are sorted newest first
   return { newest, nodes: nodes.map((n) => ({ ...n, ...layout.get(n.id) })), edges };
 }

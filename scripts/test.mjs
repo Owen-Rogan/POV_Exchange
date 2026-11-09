@@ -351,13 +351,19 @@ test('the library page has a still graph preview, topic tiles, both orderings an
   assert.match(home, /data-stat="topics"[^>]*>2 topics<\/span>/);
 });
 
-test('a POV page has a where-this-sits map with links, and related links', () => {
+test('a POV page has a where-this-sits diagram with links, and the same connections as text', () => {
   const { read } = built(TWO());
   const page = read('pov/alpha/index.html');
-  assert.match(page, /<svg class="minimap-svg"[^>]*role="group"/);
-  assert.match(page, /<a href="\.\.\/beta\/"><title>Beta POV<\/title>/);
-  assert.match(page, /<a href="\.\.\/\.\.\/#topic-agents">/);
-  assert.match(page, /<h2 id="rel-h">Related<\/h2>/);
+  // the picture is a wide and a narrow drawing, hidden from screen readers; its links are not tab stops
+  assert.match(page, /<svg class="eg-svg eg-wide"[^>]*aria-hidden="true"/);
+  assert.match(page, /<svg class="eg-svg eg-narrow"[^>]*aria-hidden="true"/);
+  assert.match(page, /<a class="eg-link" href="\.\.\/beta\/" tabindex="-1"><title>Beta POV<\/title>/);
+  assert.match(page, /<a class="eg-link" href="\.\.\/\.\.\/#topic-agents" tabindex="-1">/);
+  // the text lists are the accessible version, and the old separate Related section is folded in
+  assert.match(page, /<section class="sits-group"><h3>Related POVs<\/h3>\s*<ul>\s*<li><a href="\.\.\/beta\/">Beta POV<\/a>/);
+  assert.match(page, /<section class="sits-group"><h3>Topics<\/h3>\s*<ul>\s*<li><a href="\.\.\/\.\.\/#topic-agents">Agents<\/a>/);
+  assert.ok(!page.includes('id="rel-h"'), 'there should be one connections section, not two');
+  assert.ok(!page.includes('minimap'), 'the old mini map is gone');
   assert.match(page, /min read/);
 });
 
@@ -458,7 +464,8 @@ test('120 generated sample POVs build, with distinct finite positions and a quic
   const seen = new Set();
   for (const n of g.nodes) {
     assert.ok([n.x, n.y, n.z].every(Number.isFinite), n.id);
-    assert.ok(Math.hypot(n.x, n.y, n.z) <= 100.01, `${n.id} is outside the layout radius`);
+    // Topics, POVs and documents fit inside radius 100; glossary terms sit on an outer shell at 1.18 times that.
+    assert.ok(Math.hypot(n.x, n.y, n.z) <= (n.kind === 'term' ? 118.01 : 100.01), `${n.id} is outside the layout radius`);
     const key = `${n.x},${n.y},${n.z}`;
     assert.ok(!seen.has(key), `${n.id} sits exactly on another node`);
     seen.add(key);
@@ -1386,4 +1393,359 @@ test('browser code: no new script reads or writes anything outside same-site dat
     assert.ok(!/innerHTML|outerHTML|insertAdjacentHTML|document\.write|\beval\s*\(/.test(code), `${file} uses an unsafe API`);
     assert.ok(!/document\.cookie|sessionStorage|indexedDB|navigator\.sendBeacon/.test(code), `${file} stores data somewhere unexpected`);
   }
+});
+
+
+// ---------------------------------------------------- where this sits (ego diagram)
+
+const egoUrl = pathToFileURL(join(repo, 'scripts/lib/ego.mjs')).href;
+const layoutUrl = pathToFileURL(join(repo, 'scripts/lib/layout.mjs')).href;
+const REAL_TITLES = [
+  'Prompts fail quietly', 'A very long title that goes on and on about how pilots should always start with a small, owned checklist',
+  'Supercalifragilisticexpialidocious-and-unbreakable-word-title', 'Budgets', 'Handoffs work best in pairs',
+];
+const egoData = (over = {}) => ({
+  self: { label: 'Sample 015: Playbooks fail quietly', draft: false },
+  topics: [{ label: 'Data foundations', href: '../../#topic-data' }, { label: 'Evaluation and testing', href: '../../#topic-eval' }],
+  related: REAL_TITLES.map((label, i) => ({ label, href: `../r${i}/`, draft: i === 1 })),
+  moreRelated: 0,
+  terms: [{ label: 'Guardrail', href: '../../glossary/#guardrail' }, { label: 'Human in the loop', href: '../../glossary/#hitl' }],
+  moreTerms: 0,
+  moreHref: '#connections-list',
+  ...over,
+});
+
+/** Pull every pill rectangle and text line out of a drawing, with the numbers the layout used. */
+function egoShapes(svg) {
+  const num = (s, k) => Number(new RegExp(`${k}="([-\\d.]+)"`).exec(s)[1]);
+  const pills = [...svg.matchAll(/<rect class="eg-pill[^"]*"[^>]*\/>/g)].map((m) => ({ x: num(m[0], 'x'), y: num(m[0], 'y'), w: num(m[0], 'width'), h: num(m[0], 'height') }));
+  const lines = [...svg.matchAll(/<tspan x="([-\d.]+)" y="([-\d.]+)">([^<]*)<\/tspan>/g)].map((m) => ({ x: Number(m[1]), y: Number(m[2]), text: m[3] }));
+  const view = /viewBox="0 0 (\d+) (\d+)"/.exec(svg);
+  return { pills, lines, W: Number(view[1]), H: Number(view[2]) };
+}
+
+test('where this sits: pills never overlap and always sit inside the picture, wide and narrow', async () => {
+  const { egoWide, egoNarrow } = await import(egoUrl);
+  for (const d of [egoData(), egoData({ related: [], terms: [] }), egoData({ topics: [], related: [] }), egoData({ moreRelated: 9, moreTerms: 4, terms: Array.from({ length: 5 }, (_, i) => ({ label: `Term number ${i}`, href: `../g${i}` })) })]) {
+    for (const draw of [egoWide, egoNarrow]) {
+      const { pills, W, H } = egoShapes(draw(d).svg);
+      assert.ok(pills.length >= 1);
+      for (const p of pills) assert.ok(p.x >= 0 && p.y >= 0 && p.x + p.w <= W && p.y + p.h <= H, `${draw.name}: a pill sticks out of the picture`);
+      for (let i = 0; i < pills.length; i++) for (let j = i + 1; j < pills.length; j++) {
+        const a = pills[i], b = pills[j];
+        const apart = a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y;
+        assert.ok(apart, `${draw.name}: pills ${i} and ${j} overlap`);
+      }
+    }
+  }
+});
+
+test('where this sits: every line of text fits inside its pill at the width it is drawn', async () => {
+  const { egoWide, egoNarrow, FONT } = await import(egoUrl);
+  assert.ok(FONT >= 12, 'text in the drawing must be at least 12px');
+  for (const draw of [egoWide, egoNarrow]) {
+    const { pills, lines } = egoShapes(draw(egoData()).svg);
+    for (const l of lines) {
+      const home = pills.find((p) => l.x >= p.x && l.x < p.x + p.w && l.y > p.y && l.y <= p.y + p.h);
+      assert.ok(home, `${draw.name}: "${l.text}" is not inside any pill`);
+      // a generous 0.6em per character, the same assumption the layout wraps with
+      assert.ok(l.x + Array.from(l.text).length * FONT * 0.6 <= home.x + home.w, `${draw.name}: "${l.text}" runs past its pill`);
+    }
+  }
+});
+
+test('where this sits: long titles are cut with an ellipsis, with the full title in a tooltip', async () => {
+  const { egoWide, wrapLines } = await import(egoUrl);
+  const cut = wrapLines(REAL_TITLES[1], 20, 2);
+  assert.equal(cut.length, 2);
+  assert.ok(cut[1].endsWith(String.fromCharCode(0x2026)));
+  assert.ok(cut.every((l) => Array.from(l).length <= 20));
+  assert.deepEqual(wrapLines('Short title', 20, 2), ['Short title']);
+  assert.ok(Array.from(wrapLines('Supercalifragilisticexpialidocious', 12, 2)[0]).length <= 12, 'one word longer than a line is cut');
+  assert.match(egoWide(egoData()).svg, new RegExp(`<title>${REAL_TITLES[1]}</title>`));
+});
+
+test('where this sits: caps the groups and says how many more, linking to the text lists', async () => {
+  const { egoWide, egoNarrow } = await import(egoUrl);
+  for (const draw of [egoWide, egoNarrow]) {
+    const svg = draw(egoData({ moreRelated: 9, moreTerms: 4 })).svg;
+    assert.match(svg, /\+9 more/);
+    assert.match(svg, /\+4 more/);
+    assert.match(svg, /href="#connections-list"/);
+  }
+});
+
+test('where this sits: draft pills are dashed, terms have their own colour class, and the picture is deterministic', async () => {
+  const { egoWide, egoHtml } = await import(egoUrl);
+  assert.match(egoWide(egoData()).svg, /class="eg-pill eg-pov drf"/);
+  assert.match(egoWide(egoData()).svg, /class="eg-pill eg-term"/);
+  assert.equal(egoHtml(egoData()), egoHtml(egoData()));
+  const both = egoHtml(egoData());
+  assert.match(both, /eg-wide/);
+  assert.match(both, /eg-narrow/);
+});
+
+test('where this sits: markup in a title is escaped, and no style attribute or script is ever written', async () => {
+  const { egoHtml } = await import(egoUrl);
+  const html = egoHtml(egoData({ self: { label: 'A "quoted" <b>bold</b> & title' }, related: [{ label: '<img src=x onerror=alert(1)>', href: '../x/"><script>' }] }));
+  assert.ok(!/<b>|<img|<script/i.test(html), 'raw markup reached the svg');
+  assert.ok(!/ style=/.test(html), 'a style attribute would be blocked by the content security policy');
+  assert.match(html, /&lt;b&gt;bold&lt;\/b&gt;/);
+});
+
+test('where this sits: a POV with no topics or relations still draws a valid picture', async () => {
+  const { egoHtml } = await import(egoUrl);
+  const html = egoHtml(egoData({ topics: [], related: [], terms: [] }));
+  assert.match(html, /<svg class="eg-svg eg-wide"/);
+  assert.match(html, /No related POVs/);
+});
+
+test('where this sits: the stylesheet colours every pill kind the build can draw', () => {
+  const css = readFileSync(join(repo, 'site/styles.css'), 'utf8');
+  for (const kind of ['topic', 'pov', 'term', 'more']) assert.match(css, new RegExp(`\\.eg-stripe\\.eg-${kind}\\b`), `no colour for ${kind}`);
+  assert.match(css, /\.eg-pill\.drf\s*\{[^}]*stroke-dasharray/);
+});
+
+// ------------------------------------------------------------ clustered layout
+
+function clusterInput(nPovs = 60) {
+  const topics = ['a', 'b', 'c', 'd', 'e'].map((id, i) => ({ id: `t:${id}`, parent: i === 3 ? 't:a' : null, related: i === 1 ? ['t:a'] : [] }));
+  const povs = Array.from({ length: nPovs }, (_, i) => {
+    const main = topics[i % topics.length].id;
+    const second = topics[(i * 3 + 1) % topics.length].id;
+    return { id: `p:s${i}`, topics: second !== main && i % 3 === 0 ? [main, second] : [main], docs: i % 10 === 0 ? [`d:s${i}/1`] : [] };
+  });
+  const terms = [{ id: 'g:x', uses: ['p:s0', 'p:s1'] }, { id: 'g:y', uses: ['p:s2'] }, { id: 'g:z', uses: [] }];
+  return { topics, povs, terms };
+}
+
+test('cluster layout: deterministic, finite, centred, and every node has its own place', async () => {
+  const { computeClusterLayout } = await import(layoutUrl);
+  const input = clusterInput();
+  const a = computeClusterLayout(input);
+  const b = computeClusterLayout(clusterInput());
+  assert.deepEqual([...a], [...b], 'the same input must give the same positions');
+  const expected = input.topics.length + input.povs.length + input.povs.reduce((n, p) => n + p.docs.length, 0) + input.terms.length;
+  assert.equal(a.size, expected);
+  const seen = new Set();
+  for (const [id, p] of a) {
+    assert.ok([p.x, p.y, p.z].every(Number.isFinite), id);
+    const key = `${p.x},${p.y},${p.z}`;
+    assert.ok(!seen.has(key), `${id} sits exactly on another node`);
+    seen.add(key);
+  }
+});
+
+test('cluster layout: at least 95 percent of POVs sit nearest their own main topic, and lines to it are short', async () => {
+  const { computeClusterLayout } = await import(layoutUrl);
+  const input = clusterInput(120);
+  const pos = computeClusterLayout(input);
+  const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+  let own = 0, longest = 0, total = 0;
+  for (const p of input.povs) {
+    const nearest = input.topics.map((t) => [t.id, dist(pos.get(p.id), pos.get(t.id))]).sort((x, y) => x[1] - y[1])[0][0];
+    if (nearest === p.topics[0]) own += 1;
+    longest = Math.max(longest, dist(pos.get(p.id), pos.get(p.topics[0])));
+    total += 1;
+  }
+  assert.ok(own / total >= 0.95, `only ${own} of ${total} POVs are nearest their own topic`);
+  assert.ok(longest < 45, `a POV is ${longest.toFixed(0)} units from its main topic`);
+});
+
+test('cluster layout: POVs and topics fit radius 100, glossary terms sit outside the clusters on a wider shell', async () => {
+  const { computeClusterLayout } = await import(layoutUrl);
+  const input = clusterInput();
+  const pos = computeClusterLayout(input);
+  let farthest = 0;
+  for (const [id, p] of pos) {
+    const r = Math.hypot(p.x, p.y, p.z);
+    if (id.startsWith('g:')) assert.ok(Math.abs(r - 118) < 0.5, `${id} is not on the term shell (${r.toFixed(1)})`);
+    else farthest = Math.max(farthest, r);
+  }
+  assert.ok(Math.abs(farthest - 100) < 0.5, `non-term nodes reach ${farthest.toFixed(1)}, expected 100`);
+});
+
+test('cluster layout: a topic with one POV, an empty topic and no POVs at all all lay out', async () => {
+  const { computeClusterLayout } = await import(layoutUrl);
+  const one = computeClusterLayout({ topics: [{ id: 't:a' }, { id: 't:b' }], povs: [{ id: 'p:only', topics: ['t:a'], docs: [] }] });
+  assert.equal(one.size, 3);
+  for (const p of one.values()) assert.ok([p.x, p.y, p.z].every(Number.isFinite));
+  assert.equal(computeClusterLayout({ topics: [], povs: [] }).size, 0);
+  const lone = computeClusterLayout({ topics: [{ id: 't:a' }], povs: [] });
+  assert.equal(lone.size, 1);
+});
+
+test('cluster layout: 500 POVs lay out quickly', async () => {
+  const { computeClusterLayout } = await import(layoutUrl);
+  const started = Date.now();
+  const pos = computeClusterLayout(clusterInput(500));
+  assert.ok(pos.size > 500);
+  assert.ok(Date.now() - started < 3000, 'layout took more than 3 seconds');
+});
+
+// ---------------------------------------------------------------- calm lines
+
+test('graph.json: a POV main topic is a link, its other topics are link2, and the built file says so', () => {
+  const { read } = built(TWO());
+  const g = JSON.parse(read('data/graph.json'));
+  const beta = g.edges.filter((e) => e.s === 'p:beta' && e.t.startsWith('t:'));
+  assert.equal(beta.length, 2, 'beta lists two topics');
+  assert.equal(beta.filter((e) => e.k === 'link').length, 1, 'exactly one main-topic line');
+  assert.equal(beta.filter((e) => e.k === 'link2').length, 1, 'the other topic is a secondary line');
+  const alpha = g.edges.filter((e) => e.s === 'p:alpha' && e.t.startsWith('t:'));
+  assert.deepEqual(alpha.map((e) => e.k), ['link']);
+});
+
+test('edge reveal: secondary and glossary lines show only for the node you pick', async () => {
+  const { edgeReveal, QUIET_EDGES } = await import(modUrl('graph-common.js'));
+  assert.deepEqual([...QUIET_EDGES].sort(), ['link2', 'term']);
+  const model = {
+    edges: [
+      { s: 'p:a', t: 't:x', k: 'link' }, { s: 'p:a', t: 't:y', k: 'link2' }, { s: 'p:b', t: 't:y', k: 'link2' },
+      { s: 'g:q', t: 'p:a', k: 'term' }, { s: 't:x', t: 't:y', k: 'topic' }, { s: 'p:a', t: 'd:a/1', k: 'doc' },
+    ],
+  };
+  assert.deepEqual([...edgeReveal(model, null)], [1, 0, 0, 0, 1, 1], 'calm by default');
+  assert.deepEqual([...edgeReveal(model, 'p:a')], [1, 1, 0, 1, 1, 1], "p:a shows its own other-topic and term lines only");
+  assert.deepEqual([...edgeReveal(model, 't:y')], [1, 1, 1, 0, 1, 1], 'a topic shows the POVs that list it second');
+});
+
+// -------------------------------------------------------------- side browser
+
+async function browseFixture() {
+  const { withIndex } = await import(modUrl('graph-data.js'));
+  const { applyFilters } = await import(modUrl('graph-filter.js'));
+  const { browseTree } = await import(modUrl('browse-model.js'));
+  const topics = [{ id: 'agents', title: 'Agents' }, { id: 'gov', title: 'Governance' }, { id: 'empty', title: 'Empty topic' }];
+  const model = withIndex({
+    nodes: [
+      { id: 't:agents', kind: 'topic', ref: 'agents', label: 'Agents' },
+      { id: 't:gov', kind: 'topic', ref: 'gov', label: 'Governance', sample: true },
+      { id: 't:empty', kind: 'topic', ref: 'empty', label: 'Empty topic' },
+      { id: 'p:one', kind: 'pov', ref: 'one', label: 'One about budgets', date: '2026-03-01', status: 'agreed' },
+      { id: 'p:two', kind: 'pov', ref: 'two', label: 'Two about agents', date: '2026-05-01', status: 'agreed' },
+      { id: 'p:three', kind: 'pov', ref: 'three', label: 'Three is a draft', date: '2026-06-01', status: 'draft' },
+      { id: 'p:four', kind: 'pov', ref: 'four', label: 'Four is a sample', date: '2026-04-01', status: 'agreed', sample: true },
+      { id: 'g:term', kind: 'term', ref: 'term', label: 'Guardrail' },
+    ],
+    edges: [
+      { s: 'p:one', t: 't:agents', k: 'link' }, { s: 'p:one', t: 't:gov', k: 'link2' },
+      { s: 'p:two', t: 't:agents', k: 'link' }, { s: 'p:three', t: 't:gov', k: 'link' }, { s: 'p:four', t: 't:gov', k: 'link' },
+      { s: 'g:term', t: 'p:one', k: 'term' },
+    ],
+  });
+  const povs = [
+    { slug: 'one', title: 'One about budgets', summary: 'Money.', author: 'A', topics: ['agents', 'gov'], date: '2026-03-01', status: 'agreed' },
+    { slug: 'two', title: 'Two about agents', summary: '', author: 'B', topics: ['agents'], date: '2026-05-01', status: 'agreed' },
+    { slug: 'three', title: 'Three is a draft', summary: '', author: 'B', topics: ['gov'], date: '2026-06-01', status: 'draft' },
+    { slug: 'four', title: 'Four is a sample', summary: '', author: 'C', topics: ['gov'], date: '2026-04-01', status: 'agreed', sample: true },
+  ];
+  const povBySlug = new Map(povs.map((p) => [p.slug, p]));
+  const topicById = new Map(topics.map((t) => [t.id, t]));
+  const tree = (f) => browseTree(model, povBySlug, topics, topicById, applyFilters(model, povBySlug, topicById, { q: '', topic: '', samples: true, drafts: false, terms: false, until: null, ...f }));
+  return { model, povBySlug, topics, tree };
+}
+
+test('browse model: every POV appears once, under its main topic, newest first', async () => {
+  const { tree } = await browseFixture();
+  const t = tree({ drafts: true });
+  const rows = t.groups.flatMap((g) => g.rows.map((r) => r.id));
+  assert.equal(rows.length, new Set(rows).size, 'a POV is listed twice');
+  assert.equal(rows.length, 4);
+  const gov = t.groups.find((g) => g.id === 't:gov');
+  assert.deepEqual(gov.rows.map((r) => r.slug), ['three', 'four'], 'one is under Agents, its first topic, not here');
+  assert.deepEqual(t.groups.find((g) => g.id === 't:agents').rows.map((r) => r.slug), ['two', 'one']);
+  assert.deepEqual(t.groups.find((g) => g.id === 't:agents').rows[1].also, ['Governance'], 'the other topics are kept as chips');
+});
+
+test('browse model: the sample and draft switches change the list and the counts', async () => {
+  const { tree } = await browseFixture();
+  const count = (t) => t.groups.reduce((n, g) => n + g.rows.length, 0);
+  assert.equal(count(tree({})), 3, 'drafts hidden by default: one, two, four');
+  assert.equal(count(tree({ drafts: true })), 4);
+  assert.equal(count(tree({ samples: false })), 2);
+  assert.equal(count(tree({ samples: false, drafts: true })), 3);
+  assert.equal(tree({ samples: false }).groups.find((g) => g.id === 't:gov'), undefined, 'a sample-only topic leaves the list with samples off');
+  assert.equal(tree({}).total, 3);
+  assert.equal(tree({}).groups.find((g) => g.id === 't:empty'), undefined, 'a topic with nothing to show is not listed');
+});
+
+test('browse model: a search keeps only matching POVs, and topics with no match disappear', async () => {
+  const { tree } = await browseFixture();
+  const t = tree({ q: 'budgets' });
+  assert.equal(t.searching, true);
+  assert.equal(t.shown, 1);
+  assert.equal(t.total, 3, 'the total is what the switches allow, not what matches');
+  assert.deepEqual(t.groups.map((g) => g.id), ['t:agents']);
+  assert.deepEqual(t.groups[0].rows.map((r) => r.slug), ['one']);
+  assert.equal(tree({ q: 'nothing like this' }).groups.length, 0);
+});
+
+test('browse model: glossary terms are listed only while the terms switch is on', async () => {
+  const { tree } = await browseFixture();
+  assert.equal(tree({}).terms.length, 0);
+  assert.deepEqual(tree({ terms: true }).terms.map((x) => x.title), ['Guardrail']);
+});
+
+test('browse model: groupFor and rowKeyFor say where a selection lives', async () => {
+  const { model, povBySlug } = await browseFixture();
+  const { groupFor, rowKeyFor, TERMS_GROUP } = await import(modUrl('browse-model.js'));
+  assert.equal(groupFor(model, povBySlug, 'p:one'), 't:agents');
+  assert.equal(groupFor(model, povBySlug, 't:gov'), 't:gov');
+  assert.equal(groupFor(model, povBySlug, 'g:term'), TERMS_GROUP);
+  assert.equal(groupFor(model, povBySlug, 'nope'), null);
+  assert.equal(rowKeyFor({ byId: new Map([['d:one/1', { kind: 'doc', ref: 'one' }]]) }, 'd:one/1'), 'p:one', 'a document highlights its POV');
+});
+
+// ------------------------------------------------------------ moving around
+
+test('drag meaning: Turn mode turns, Move mode slides, Shift flips either, other buttons always slide', async () => {
+  const { dragMeaning } = await import(modUrl('controls.js'));
+  assert.equal(dragMeaning(), 'rotate');
+  assert.equal(dragMeaning({ mode: 'turn' }), 'rotate');
+  assert.equal(dragMeaning({ mode: 'move' }), 'pan');
+  assert.equal(dragMeaning({ mode: 'turn', shift: true }), 'pan');
+  assert.equal(dragMeaning({ mode: 'move', shift: true }), 'rotate');
+  for (const mode of ['turn', 'move']) {
+    assert.equal(dragMeaning({ mode, button: 1 }), 'pan', 'middle button');
+    assert.equal(dragMeaning({ mode, button: 2 }), 'pan', 'right button');
+  }
+  // a finger or pen has no buttons and no Shift key: only the mode counts
+  assert.equal(dragMeaning({ mode: 'turn', pointerType: 'touch', shift: true, button: 2 }), 'rotate');
+  assert.equal(dragMeaning({ mode: 'move', pointerType: 'touch' }), 'pan');
+  assert.equal(dragMeaning({ mode: 'move', pointerType: 'pen', shift: true }), 'pan');
+});
+
+// --------------------------------------------------------- page structure
+
+test('graph page: one browser, the old List view button and long list are gone, and a plain list closes at the foot', () => {
+  const { read } = built(TWO());
+  const page = read('graph/index.html');
+  assert.ok(!page.includes('gp-listlink') && !page.includes('List view'), 'the List view button is gone');
+  assert.ok(!page.includes('The graph as a list'));
+  assert.match(page, /<aside class="browse" id="browse"[^>]*hidden>/);
+  assert.match(page, /<details class="plain" id="plain">\s*<summary id="plain-h">Plain list of everything<\/summary>/);
+  assert.match(page, /data-mode="turn"[^>]*aria-pressed="true"/);
+  assert.match(page, /data-act="zoom-in"/);
+  assert.match(page, /data-act="zoom-out"/);
+  assert.match(page, /data-act="home"/);
+  assert.match(page, /<nav class="nodelist" id="nodelist"/);
+});
+
+test('the plain list: each POV once under its main topic, topics collapsed, other topics as chips', () => {
+  const { read } = built(TWO());
+  const page = read('graph/index.html');
+  assert.equal((page.match(/data-node="p:alpha"/g) ?? []).length, 1);
+  assert.equal((page.match(/data-node="p:beta"/g) ?? []).length, 1, 'beta lists two topics but appears once');
+  assert.match(page, /<details class="pl-topic"[^>]*>\s*<summary>/);
+  assert.ok(!/<details class="pl-topic"[^>]* open/.test(page), 'topics start collapsed');
+  assert.match(page, /class="chip-s"/);
+});
+
+test('stylesheet: a bare .status rule cannot give the Draft and Agreed chips form margins (the old clash)', () => {
+  const css = readFileSync(join(repo, 'site/styles.css'), 'utf8');
+  const bare = css.split('\n').filter((l) => /^\.status\s*[,{]/.test(l.trim()));
+  for (const l of bare) assert.ok(!/margin|min-height/.test(l), `a bare .status rule sets spacing: ${l}`);
+  assert.match(css, /\.form-status\s*\{/);
+  assert.match(readFileSync(join(repo, 'site/add/index.html'), 'utf8'), /class="form-status"/);
 });

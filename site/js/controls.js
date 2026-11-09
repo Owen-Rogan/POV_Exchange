@@ -2,18 +2,34 @@
 // and calls the engine's small API; it never touches the camera itself, so the
 // rules for what a gesture means live in one place.
 //
-// Mouse: drag turns, wheel zooms toward the cursor, right-drag / Shift-drag /
-// middle-drag slides, click selects, double-click focuses (empty space resets).
-// Touch: one finger turns, two fingers pinch and slide, tap selects, double-tap focuses.
+// Mouse: drag turns (or slides, in Move mode), wheel zooms toward the cursor,
+// right-drag / middle-drag always slides, Shift flips what a drag does, click
+// selects, double-click focuses (empty space resets).
+// Touch: one finger turns (or slides, in Move mode), two fingers pinch and
+// slide, tap selects, double-tap focuses.
 // Keys (stage focused): arrows turn, Shift+arrows slide, + - zoom, 0 reset, F frame.
 
 const TAP_SLOP = 5; // pixels of movement that still count as a click
 const DOUBLE_MS = 350;
 
 /**
+ * What a one-pointer drag does: 'rotate' (turn the view) or 'pan' (slide it).
+ *   mode         'turn' (the default) or 'move', from the on-screen switch
+ *   shift        Shift held on a mouse: flips the meaning, so either mode can do both
+ *   button       mouse button; the middle and right buttons always slide
+ *   pointerType  'mouse', 'touch' or 'pen'; only a mouse has buttons and a held Shift
+ */
+export function dragMeaning({ mode = 'turn', shift = false, button = 0, pointerType = 'mouse' } = {}) {
+  if (pointerType === 'mouse' && (button === 1 || button === 2)) return 'pan';
+  const base = mode === 'move' ? 'pan' : 'rotate';
+  if (pointerType !== 'mouse' || !shift) return base;
+  return base === 'pan' ? 'rotate' : 'pan';
+}
+
+/**
  * @param {HTMLElement} el   the stage; it receives all graph gestures
  * @param {object} api       { pick(x,y), rotate(dx,dy), pan(dx,dy), zoomAt(factor,x,y), hover(id,x,y),
- *                             select(id), focusNode(id), reset(), frame(), interact() }
+ *                             select(id), focusNode(id), reset(), frame(), interact(), dragMode?() }
  * @returns {() => void} unbind
  */
 export function bindControls(el, api) {
@@ -41,8 +57,8 @@ export function bindControls(el, api) {
     capture(ev);
     api.interact();
     if (ptrs.size === 1) {
-      const pan = ev.pointerType === 'mouse' && (ev.button === 2 || ev.button === 1 || ev.shiftKey);
-      drag = { x: p.x, y: p.y, lx: p.x, ly: p.y, mode: pan ? 'pan' : 'rotate', moved: false };
+      const mode = dragMeaning({ mode: api.dragMode ? api.dragMode() : 'turn', shift: ev.shiftKey, button: ev.button, pointerType: ev.pointerType });
+      drag = { x: p.x, y: p.y, lx: p.x, ly: p.y, mode, moved: false };
       el.classList.add('grabbing');
     } else if (ptrs.size === 2) {
       drag = null;
