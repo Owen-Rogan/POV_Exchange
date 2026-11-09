@@ -49,6 +49,7 @@ export function graphSvg(graph, { keep = null, current = null, className, ariaLa
   const nodes = graph.nodes.filter((n) => !keep || keep.has(n.id));
   if (nodes.length === 0) return '';
   const pos = new Map(nodes.map((n) => [n.id, project(n)]));
+  const byId = new Map(nodes.map((n) => [n.id, n]));
 
   let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
   for (const n of nodes) {
@@ -65,17 +66,18 @@ export function graphSvg(graph, { keep = null, current = null, className, ariaLa
   for (const e of graph.edges) {
     const a = pos.get(e.s), b = pos.get(e.t);
     if (!a || !b) continue;
-    lines.push(`<line class="e e-${esc(e.k)}" x1="${r2(a.x)}" y1="${r2(a.y)}" x2="${r2(b.x)}" y2="${r2(b.y)}" vector-effect="non-scaling-stroke"/>`);
+    const smp = byId.get(e.s)?.sample || byId.get(e.t)?.sample ? ' smp' : '';
+    lines.push(`<line class="e e-${esc(e.k)}${smp}" x1="${r2(a.x)}" y1="${r2(a.y)}" x2="${r2(b.x)}" y2="${r2(b.y)}" vector-effect="non-scaling-stroke"/>`);
   }
 
   const drawn = [...nodes].sort((a, b) => pos.get(a.id).z - pos.get(b.id).z);
   const shapes = drawn.map((n) => {
     const p = pos.get(n.id);
     const r = radius(n, p.s);
-    const cls = `n n-${n.kind}${n.id === current ? ' cur' : ''}`;
+    const cls = `n n-${n.kind}${n.id === current ? ' cur' : ''}${n.sample ? ' smp' : ''}`;
     const circle = `<circle class="${cls}" cx="${r2(p.x)}" cy="${r2(p.y)}" r="${r}"/>`;
     const label = labelKinds.has(n.kind)
-      ? `<text class="lbl lbl-${n.kind}" x="${r2(p.x)}" y="${r2(p.y + r + 7)}" text-anchor="middle">${esc(clip(n.label, 26))}</text>`
+      ? `<text class="lbl lbl-${n.kind}${n.sample ? ' smp' : ''}" x="${r2(p.x)}" y="${r2(p.y + r + 7)}" text-anchor="middle">${esc(clip(n.label, 26))}</text>`
       : '';
     const target = href ? href(n) : null;
     if (target) {

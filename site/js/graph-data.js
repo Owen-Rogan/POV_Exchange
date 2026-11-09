@@ -1,22 +1,16 @@
-// Shared graph model for the 3D and 2D renderers: loads graph.json, builds the
-// adjacency maps, and answers "who is connected to this node". Positions come
-// from the build (precomputed), so nothing is simulated here.
-
-export async function loadGraph() {
-  const res = await fetch('data/graph.json');
-  if (!res.ok) throw new Error('graph.json ' + res.status);
-  const graph = await res.json();
-  return withIndex(graph);
-}
+// Shared graph model: adjacency maps over graph.json, and "what is connected to
+// this node" for the reader panel. Positions come from the build (precomputed),
+// so nothing is simulated in the browser. Pure functions, no DOM.
 
 export function withIndex(graph) {
   const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+  const index = new Map(graph.nodes.map((n, i) => [n.id, i]));
   const adj = new Map(graph.nodes.map((n) => [n.id, new Set()]));
   for (const e of graph.edges) {
     adj.get(e.s)?.add(e.t);
     adj.get(e.t)?.add(e.s);
   }
-  return { ...graph, byId, adj };
+  return { ...graph, byId, index, adj };
 }
 
 /** The node plus everything one edge away. */
@@ -26,15 +20,45 @@ export function neighbourSet(model, id) {
   return set;
 }
 
-/** What to show in the detail panel for a node, from povs.json and topics.json. */
-export function describe(model, node, povBySlug, topicById) {
+const byDateDesc = (model) => (a, b) => {
+  const da = model.byId.get(a)?.date ?? '';
+  const db = model.byId.get(b)?.date ?? '';
+  return da < db ? 1 : da > db ? -1 : a < b ? -1 : 1;
+};
+
+/**
+ * Grouped connections for a node, as node ids.
+ *   topic: povs (newest first), topics (parent, children and related topics)
+ *   pov:   topics, related (POV to POV), siblings (other POVs on the same topics), docs
+ *   doc:   pov (its parent POV)
+ * `siblings` is limited to `limit` entries and `moreSiblings` says how many were left out.
+ */
+export function connections(model, id, { limit = 8 } = {}) {
+  const node = model.byId.get(id);
+  const out = { topics: [], related: [], siblings: [], moreSiblings: 0, docs: [], povs: [], pov: null };
+  if (!node) return out;
+  const near = [...(model.adj.get(id) ?? [])];
+  const kind = (nid) => model.byId.get(nid)?.kind;
+
   if (node.kind === 'topic') {
-    const t = topicById.get(node.ref);
-    return { kind: 'Topic', title: node.label, text: t?.view ?? '', meta: `${node.n} POV${node.n === 1 ? '' : 's'}`, href: `#topic-${node.ref}`, cta: 'Jump to this topic' };
+    out.povs = near.filter((n) => kind(n) === 'pov').sort(byDateDesc(model));
+    out.topics = near.filter((n) => kind(n) === 'topic').sort();
+  } else if (node.kind === 'pov') {
+    out.topics = near.filter((n) => kind(n) === 'topic').sort();
+    out.related = near.filter((n) => kind(n) === 'pov').sort(byDateDesc(model));
+    out.docs = near.filter((n) => kind(n) === 'doc').sort();
+    const seen = new Set([id, ...out.related]);
+    const siblings = [];
+    for (const t of out.topics) {
+      for (const n of model.adj.get(t) ?? []) {
+        if (kind(n) === 'pov' && !seen.has(n)) { seen.add(n); siblings.push(n); }
+      }
+    }
+    siblings.sort(byDateDesc(model));
+    out.siblings = siblings.slice(0, limit);
+    out.moreSiblings = Math.max(0, siblings.length - limit);
+  } else if (node.kind === 'doc') {
+    out.pov = near.find((n) => kind(n) === 'pov') ?? null;
   }
-  const p = povBySlug.get(node.ref);
-  if (node.kind === 'doc') {
-    return { kind: 'Document', title: node.label, text: p ? `Attached to: ${p.title}` : '', meta: '', href: `docs/${node.ref}/${encodeURIComponent(node.label)}`, cta: 'Download', download: true };
-  }
-  return { kind: p?.type === 'document' ? 'Document' : 'POV', title: node.label, text: p?.summary ?? '', meta: p ? `${p.author} \u00B7 ${p.date}` : '', href: `pov/${node.ref}/`, cta: 'Read' };
+  return out;
 }

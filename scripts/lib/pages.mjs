@@ -35,7 +35,7 @@ const ICONS = '<svg class="i-moon" viewBox="0 0 24 24" aria-hidden="true" focusa
   + '<svg class="i-sun" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.6M12 18.9v2.6M2.5 12h2.6M18.9 12h2.6M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8"/></svg>';
 
 export function headerHtml(up, current = '') {
-  const items = [['explore', 'Explore', ''], ['add', 'Add a POV', 'add/']];
+  const items = [['library', 'Library', ''], ['graph', 'Graph', 'graph/'], ['add', 'Add a POV', 'add/']];
   const links = items
     .map(([id, label, path]) => `<a href="${up}${path}"${current === id ? ' aria-current="page"' : ''}>${label}</a>`)
     .join('\n');
@@ -149,10 +149,11 @@ ${headTags(up)}
 <body>
 ${headerHtml(up)}
 <main id="main" class="page article">
-<p class="eyebrow">${p.type === 'document' ? 'Document' : 'POV'} &middot; ${esc(topicTitles.join(', '))}</p>
+<p class="eyebrow">${p.type === 'document' ? 'Document' : 'POV'}${p.sample ? ' &middot; Sample' : ''} &middot; ${esc(topicTitles.join(', '))}</p>
 <h1>${esc(p.title)}</h1>
 <p class="lede">${esc(p.summary)}</p>
-<p class="byline">By ${esc(p.author)} &middot; <time datetime="${esc(p.date)}">${esc(p.date)}</time> &middot; ${minutes} min read</p>
+${p.sample ? '<p class="sample-note" role="note"><strong>Sample.</strong> This POV is fictional and says nothing about what the practice thinks.</p>\n' : ''}<p class="byline">By ${esc(p.author)} &middot; <time datetime="${esc(p.date)}">${esc(p.date)}</time> &middot; ${minutes} min read</p>
+<p class="page-actions"><a class="btn ghost" href="${up}graph/#n=p:${esc(p.slug)}">Open in graph</a></p>
 <div class="prose">
 ${blocksToHtml(p.blocks)}
 </div>
@@ -167,33 +168,104 @@ ${footerHtml()}
 `;
 }
 
-// --------------------------------------------------------------- home page
+// ---------------------------------------------------------- library page
 
+const SHOW_FIRST = 6; // cards shown per topic before "Show all"
+
+/** Per-topic counts, with and without samples. A topic is sample-only when it is flagged and no real POV uses it. */
+export function topicStats(topics, povs) {
+  const stats = new Map(topics.map((t) => [t.id, { all: 0, real: 0, sampleOnly: false }]));
+  for (const p of povs) {
+    for (const id of p.topics) {
+      const s = stats.get(id);
+      s.all += 1;
+      if (!p.sample) s.real += 1;
+    }
+  }
+  for (const t of topics) {
+    const s = stats.get(t.id);
+    s.sampleOnly = Boolean(t.sample) && s.real === 0;
+  }
+  return stats;
+}
+
+const sampleAttr = (on) => (on ? ' data-sample="1"' : '');
+
+function cardHtml(p, topicById, extraClass = '') {
+  const text = `${p.title} ${p.summary} ${p.author} ${p.topics.map((id) => topicById.get(id).title).join(' ')}`.toLowerCase();
+  const kind = p.type === 'document' ? 'Document' : 'POV';
+  const tag = p.sample ? '<span class="tag">Sample</span>' : '';
+  return `<li class="card reveal${extraClass}" data-slug="${p.slug}" data-topics="${esc(p.topics.join(' '))}" data-date="${esc(p.date)}" data-text="${esc(text)}"${sampleAttr(p.sample)}><a href="pov/${p.slug}/"><span class="card-kind">${kind}${tag}</span><span class="card-title">${esc(p.title)}</span><span class="card-summary">${esc(p.summary)}</span><span class="card-meta">${esc(p.author)} &middot; ${esc(p.date)}</span></a></li>`;
+}
+
+/** The numbers under the headline. Each span carries both totals so the browser can drop samples without a reload. */
 export function statsHtml(topics, povs) {
-  const docs = povs.reduce((n, p) => n + p.documents.length, 0);
-  return `${plural(povs.length, 'POV', 'POVs')} &middot; ${plural(topics.length, 'topic', 'topics')} &middot; ${plural(docs, 'document', 'documents')}`;
+  const stats = topicStats(topics, povs);
+  const real = povs.filter((p) => !p.sample);
+  const docs = (list) => list.reduce((n, p) => n + p.documents.length, 0);
+  const span = (name, all, realN, one, many) => `<span data-stat="${name}" data-all="${all}" data-real="${realN}" data-one="${one}" data-many="${many}">${plural(all, one, many)}</span>`;
+  const realTopics = topics.filter((t) => !stats.get(t.id).sampleOnly).length;
+  return [
+    span('povs', povs.length, real.length, 'POV', 'POVs'),
+    span('topics', topics.length, realTopics, 'topic', 'topics'),
+    span('docs', docs(povs), docs(real), 'document', 'documents'),
+  ].join(' &middot; ');
+}
+
+/** A still picture of the graph for the Library header. The live graph is on its own page. */
+export function previewHtml(graph) {
+  const svg = graphSvg(graph, { className: 'preview-svg', labelKinds: new Set(['topic']) });
+  return `<a class="preview" href="graph/" aria-label="Open the knowledge graph">${svg}<span class="preview-cta">Open the graph &rarr;</span></a>`;
+}
+
+export function tilesHtml(topics, povs) {
+  const stats = topicStats(topics, povs);
+  const items = topics.map((t) => {
+    const s = stats.get(t.id);
+    return `<li class="tile reveal" data-topic="${t.id}"${sampleAttr(s.sampleOnly)}>
+<a class="tile-main" href="#topic-${t.id}"><span class="tile-title">${esc(t.title)}</span><span class="tile-view">${esc(t.view)}</span></a>
+<p class="tile-meta"><span class="tile-count" data-all="${s.all}" data-real="${s.real}">${plural(s.all, 'POV', 'POVs')}</span> <a class="tile-graph" href="graph/#t=${t.id}">View in graph</a></p>
+</li>`;
+  }).join('\n');
+  return `<section class="tiles" aria-labelledby="tiles-h">
+<h2 id="tiles-h">Topics</h2>
+<ul class="tile-grid">
+${items}
+</ul>
+</section>`;
 }
 
 export function sectionsHtml(topics, povs) {
+  const stats = topicStats(topics, povs);
   const byTopic = new Map(topics.map((t) => [t.id, []]));
   for (const p of povs) for (const id of p.topics) byTopic.get(id).push(p);
   const topicById = new Map(topics.map((t) => [t.id, t]));
 
-  return topics.map((t) => {
+  const sections = topics.map((t) => {
     const items = byTopic.get(t.id);
     const parent = t.parent ? `<p class="eyebrow">Part of ${esc(topicById.get(t.parent).title)}</p>\n` : '';
     const cards = items.length
-      ? `<ul class="cards">\n${items.map((p) => {
-        const text = `${p.title} ${p.summary} ${p.author} ${p.topics.map((id) => topicById.get(id).title).join(' ')}`.toLowerCase();
-        return `<li class="card reveal" data-slug="${p.slug}" data-topics="${esc(p.topics.join(' '))}" data-text="${esc(text)}"><a href="pov/${p.slug}/"><span class="card-kind">${p.type === 'document' ? 'Document' : 'POV'}</span><span class="card-title">${esc(p.title)}</span><span class="card-summary">${esc(p.summary)}</span><span class="card-meta">${esc(p.author)} &middot; ${esc(p.date)}</span></a></li>`;
-      }).join('\n')}\n</ul>`
+      ? `<ul class="cards">\n${items.map((p, i) => cardHtml(p, topicById, i >= SHOW_FIRST ? ' more' : '')).join('\n')}\n</ul>`
       : '<p class="empty">No POVs on this topic yet.</p>';
-    return `<section class="topic reveal" id="topic-${t.id}" data-topic="${t.id}" aria-labelledby="t-${t.id}">
+    return `<section class="topic reveal" id="topic-${t.id}" data-topic="${t.id}" aria-labelledby="t-${t.id}"${sampleAttr(stats.get(t.id).sampleOnly)}>
 ${parent}<h2 id="t-${t.id}">${esc(t.title)}</h2>
 <p class="view">${esc(t.view)}</p>
+<p class="graph-link"><a href="graph/#t=${t.id}">View this topic in the graph &rarr;</a></p>
 ${cards}
 </section>`;
-  }).join('\n');
+  });
+  return `<div class="by-topic">\n${sections.join('\n')}\n</div>`;
+}
+
+/** Every POV once, newest first. Hidden until the "Newest first" view is chosen. */
+export function latestHtml(topics, povs) {
+  const topicById = new Map(topics.map((t) => [t.id, t]));
+  return `<section class="newest" id="newest" aria-labelledby="newest-h" hidden>
+<h2 id="newest-h">Newest first</h2>
+<ul class="cards">
+${povs.map((p) => cardHtml(p, topicById)).join('\n')}
+</ul>
+</section>`;
 }
 
 export function filtersHtml(topics) {
@@ -204,6 +276,11 @@ export function filtersHtml(topics) {
 <label for="q">Search POVs</label>
 <input id="q" type="search" autocomplete="off" spellcheck="false" maxlength="100" placeholder="Search titles, summaries, authors">
 </div>
+<div class="seg" role="group" aria-label="Order" hidden>
+<button type="button" class="seg-btn" data-view="topic" aria-pressed="true">By topic</button>
+<button type="button" class="seg-btn" data-view="newest" aria-pressed="false">Newest first</button>
+</div>
+<label class="switch" hidden><input type="checkbox" class="sample-switch" checked><span>Show samples</span></label>
 <ul class="chips nojs" aria-label="Jump to a topic">
 ${chips}
 </ul>
@@ -213,15 +290,21 @@ ${chips}
 </div>`;
 }
 
+// ------------------------------------------------------------ graph page
+
+/** Every node as a plain list: the accessible twin of the graph, and the page's content without JavaScript. */
 export function nodelistHtml(topics, povs) {
+  const stats = topicStats(topics, povs);
   const byTopic = new Map(topics.map((t) => [t.id, []]));
   for (const p of povs) for (const id of p.topics) byTopic.get(id).push(p);
+  const docItems = (p) => p.documents.map((d) => `<li${sampleAttr(p.sample)}><a href="../docs/${p.slug}/${esc(encodeURIComponent(d.name))}" data-node="d:${esc(p.slug)}/${esc(d.name)}" download>${esc(d.name)}</a> <span>(document)</span></li>`).join('');
   const items = topics.map((t) => {
     const ps = byTopic.get(t.id);
     const kids = ps.length
-      ? `\n<ul>\n${ps.map((p) => `<li><a href="pov/${p.slug}/" data-node="p:${p.slug}">${esc(p.title)}</a></li>`).join('\n')}\n</ul>\n`
+      ? `\n<ul>\n${ps.map((p) => `<li${sampleAttr(p.sample)}><a href="../pov/${p.slug}/" data-node="p:${p.slug}">${esc(p.title)}</a>${p.sample ? ' <span class="tag">Sample</span>' : ''}${p.documents.length ? `<ul>${docItems(p)}</ul>` : ''}</li>`).join('\n')}\n</ul>\n`
       : '';
-    return `<li><a href="#topic-${t.id}" data-node="t:${t.id}">${esc(t.title)}</a> <span>(${plural(ps.length, 'POV', 'POVs')})</span>${kids}</li>`;
+    const n = stats.get(t.id);
+    return `<li${sampleAttr(n.sampleOnly)}><a href="../#topic-${t.id}" data-node="t:${t.id}">${esc(t.title)}</a> <span>(${plural(n.all, 'POV', 'POVs')})</span>${kids}</li>`;
   }).join('\n');
   return `<nav class="nodelist" id="nodelist" aria-label="Knowledge graph as a list">
 <ul>
@@ -239,7 +322,7 @@ export function posterHtml(graph) {
 
 // ---------------------------------------------------------------- templates
 
-export const MARKERS = ['head', 'header', 'footer', 'poster', 'stats', 'filters', 'sections', 'nodelist', 'repo'];
+export const MARKERS = ['head', 'header', 'footer', 'poster', 'preview', 'tiles', 'stats', 'filters', 'sections', 'latest', 'nodelist', 'repo'];
 
 /**
  * Replace <!-- build:name key=value ... --> markers in a site/ template.

@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Knowledge graph | POV Exchange</title>
+<meta name="description" content="Explore how our points of view on AI connect: topics, POVs and documents in one graph you can fly through and read.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Knowledge graph | POV Exchange">
+<meta property="og:description" content="Explore how our points of view on AI connect: topics, POVs and documents in one graph you can fly through and read.">
+<!-- build:head up=../ -->
+</head>
+<body class="graph-body">
+<!-- build:header up=../ current=graph -->
+<main id="main" class="gp" data-tier="static" aria-label="Knowledge graph">
+<h1 class="sr-only">Knowledge graph</h1>
+
+<div class="gp-stage" data-hero-stage>
+<div class="poster"><!-- build:poster --></div>
+</div>
+
+<div class="gp-bar" role="toolbar" aria-label="Graph controls">
+<div class="gp-search search" hidden>
+<label for="g-q">Search the graph</label>
+<input id="g-q" type="search" autocomplete="off" spellcheck="false" maxlength="100" placeholder="Search  ( / )">
+</div>
+<ul class="gp-chips chips" aria-label="Filter by topic" hidden></ul>
+<label class="switch gp-samples" hidden><input type="checkbox" class="sample-switch" checked><span>Show samples</span></label>
+<div class="gp-tools" hidden>
+<button type="button" class="tool" data-act="frame" title="Fit everything in view (F)">Frame</button>
+<button type="button" class="tool" data-act="reset" title="Reset the view (0)">Reset</button>
+<button type="button" class="tool" data-act="tour" aria-pressed="false">Tour</button>
+<button type="button" class="tool" data-act="fullscreen" title="Full screen">Full screen</button>
+</div>
+<p class="gp-count count" role="status" aria-live="polite"></p>
+</div>
+
+<div class="gp-legend" aria-label="Legend" hidden>
+<span><i class="dot t"></i>Topic</span>
+<span><i class="dot p"></i>POV</span>
+<span><i class="dot d"></i>Document</span>
+</div>
+
+<div class="gp-help" hidden><p>Drag to turn. Scroll to zoom. Right-drag or Shift-drag to move. Click a node to read it. Double-click to focus.</p></div>
+
+<div class="gp-time" hidden>
+<button type="button" class="tool" data-act="play" aria-label="Play timeline">Play</button>
+<label for="g-time">Time</label>
+<input id="g-time" type="range" min="0" max="100" value="100" step="1">
+<output class="gp-time-label" for="g-time"></output>
+</div>
+
+<a class="gp-listlink" href="#list">List view</a>
+</main>
+
+<section class="gp-list" id="list" aria-labelledby="list-h">
+<div class="page">
+<h2 id="list-h">The graph as a list</h2>
+<p class="lede">Every topic, POV and document, for reading without the animation or with a screen reader.</p>
+<!-- build:nodelist -->
+</div>
+</section>
+
+<!-- build:footer -->
+<noscript><p class="noscript">The interactive graph needs JavaScript. The list below it shows everything and works without it.</p></noscript>
+</body>
+</html>

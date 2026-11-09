@@ -18,9 +18,13 @@ POV Exchange is a **public** site. Anything merged to `main` is published to the
    - If you can write to the repository, commit to a new branch and open a pull request so the checks run before anything is published.
    - If you cannot, GitHub offers to create a fork and a pull request for you. A maintainer reviews it.
 
+## Sample POVs
+
+While the site is being shaped, `povs/samples/` holds 120 **fictional** POVs so the library and the graph have something to show. They are tagged "Sample" on the site and a switch hides them. To remove every one, delete the `povs/samples` folder. Real POVs go in `povs/<name>/`, not in `samples`.
+
 ## Topics
 
-Every POV must use topics from [`povs/topics.json`](povs/topics.json). To propose a new topic, change that file in the same pull request. Topics carry the house view that appears at the top of each section, so a new topic needs a one-line view from the practice.
+Every POV must use topics from [`povs/topics.json`](povs/topics.json). To propose a new topic, change that file in the same pull request. Topics carry the house view that appears at the top of each section, so a new topic needs a one-line view from the practice. Topics marked `"sample": true` exist only for the sample POVs and disappear from the site on their own once the samples are deleted.
 
 ## If the check fails
 
@@ -32,4 +36,5 @@ With Node 22 or later installed:
 
 ```
 node scripts/build.mjs --check
+node --test scripts/test.mjs
 ```

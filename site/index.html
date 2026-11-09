@@ -4,37 +4,36 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>POV Exchange</title>
-<meta name="description" content="A live library of our point of view on AI topics, explorable as a knowledge graph.">
+<meta name="description" content="A live library of our point of view on AI topics, with an explorable knowledge graph.">
 <meta property="og:type" content="website">
 <meta property="og:title" content="POV Exchange">
-<meta property="og:description" content="A live library of our point of view on AI topics, explorable as a knowledge graph.">
+<meta property="og:description" content="A live library of our point of view on AI topics, with an explorable knowledge graph.">
 <!-- build:head up= -->
 </head>
 <body>
-<!-- build:header up= current=explore -->
+<!-- build:header up= current=library -->
 <main id="main">
-<section class="hero" id="hero" data-tier="static" aria-labelledby="hero-h">
-<div class="hero-stage" data-hero-stage>
-<div class="poster"><!-- build:poster --></div>
-</div>
-<div class="hero-copy">
+<section class="intro" aria-labelledby="intro-h">
+<div class="intro-in">
+<div class="intro-copy">
 <p class="eyebrow">Point of view library</p>
-<h1 id="hero-h" class="kin"><span class="w">POV</span> <span class="w">Exchange</span></h1>
-<p class="lede">What we think about AI, in short takes and longer papers, with the documents behind them. Explore the graph or browse the topics below.</p>
+<h1 id="intro-h" class="kin"><span class="w">POV</span> <span class="w">Exchange</span></h1>
+<p class="lede">What we think about AI, in short takes and longer papers, with the documents behind them. Browse by topic here, or explore how it all connects in the graph.</p>
 <p class="hero-stats"><!-- build:stats --></p>
-<p class="hero-cta"><a class="btn" href="#explore">Browse POVs</a> <a class="btn ghost" href="#list">Browse as a list</a></p>
+<p class="hero-cta"><a class="btn" href="graph/">Explore the graph</a> <a class="btn ghost" href="#explore">Browse the library</a></p>
+</div>
+<!-- build:preview -->
 </div>
 </section>
 <!-- build:filters -->
 <div class="page home">
+<!-- build:tiles -->
 <!-- build:sections -->
-<details class="listview" id="list">
-<summary>Browse the graph as a list</summary>
-<!-- build:nodelist -->
-</details>
+<!-- build:latest -->
+<p class="no-results" hidden>No POVs match. Try a different word or clear the filters.</p>
 </div>
 </main>
 <!-- build:footer -->
-<noscript><p class="noscript">The animated graph needs JavaScript. Everything else on this site works without it.</p></noscript>
+<noscript><p class="noscript">Search and filters need JavaScript. Everything else on this site works without it.</p></noscript>
 </body>
 </html>

@@ -1,17 +1,26 @@
-// Sample-content generator, for previewing the graph with many entries.
+// Sample-content generator: fictional POVs, for ideation and for testing the
+// graph with many entries.
 //
-// Writes a throwaway copy of the site plus N clearly fictional POVs into
-// _samples/ (git-ignored, never part of an upload), then builds it there. The
-// real povs/ folder is never read or changed.
+// Two modes:
 //
 //   node scripts/make-samples.mjs [--count 36] [--seed 7] [--out _samples]
-//   node scripts/serve.mjs --prefix /POV_Exchange --dir _samples/dist --port 8081
+//       Preview. Writes a throwaway copy of the site plus N samples into a
+//       folder named _samples* (git-ignored, never uploaded), then builds it.
+//       The real povs/ folder is never read or changed.
+//         node scripts/serve.mjs --prefix /POV_Exchange --dir _samples/dist --port 8081
+//
+//   node scripts/make-samples.mjs --repo [--count 120] [--seed 7]
+//       Adds the samples to the real project, under povs/samples/, and adds the
+//       sample-only topics to povs/topics.json (flagged "sample": true). It only
+//       creates files, never deletes, and refuses to run if povs/samples/ exists.
+//       To remove every sample later: delete povs/samples/. The sample-only
+//       topics then disappear from the site by themselves.
 //
 // Every sample says it is fictional, so nothing here can be mistaken for the
 // practice's real point of view.
 
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -28,44 +37,75 @@ function mulberry32(seed) {
   };
 }
 
-// id, title, parent, related
+// id, title, parent, related, sampleOnly
+// The first four match the placeholder topics already in povs/topics.json. The
+// rest exist only for the samples and are flagged so they vanish with them.
 const TOPICS = [
-  ['ai-strategy', 'AI strategy', null, []],
-  ['agents', 'Agents', 'ai-strategy', ['governance']],
-  ['governance', 'Governance and risk', 'ai-strategy', []],
-  ['data-foundations', 'Data foundations', 'ai-strategy', ['agents']],
-  ['evaluation', 'Evaluation and testing', 'ai-strategy', ['agents']],
-  ['operating-model', 'Operating model', 'ai-strategy', ['workforce']],
-  ['workforce', 'Workforce and skills', null, ['adoption']],
-  ['adoption', 'Adoption and change', 'workforce', []],
-  ['security', 'Security', 'governance', ['agents']],
-  ['platforms', 'Platforms and tooling', null, ['data-foundations']],
+  ['ai-strategy', 'AI strategy', null, [], false],
+  ['agents', 'Agents', 'ai-strategy', ['governance'], false],
+  ['governance', 'Governance and risk', 'ai-strategy', [], false],
+  ['data-foundations', 'Data foundations', 'ai-strategy', ['agents'], false],
+  ['evaluation', 'Evaluation and testing', 'ai-strategy', ['agents'], true],
+  ['operating-model', 'Operating model', 'ai-strategy', ['workforce'], true],
+  ['workforce', 'Workforce and skills', null, ['adoption'], true],
+  ['adoption', 'Adoption and change', 'workforce', [], true],
+  ['security', 'Security', 'governance', ['agents'], true],
+  ['platforms', 'Platforms and tooling', null, ['data-foundations'], true],
 ];
 
+const SAMPLE_VIEW = 'SAMPLE TEXT: a fictional placeholder, not a position the practice holds.';
 const SUBJECTS = ['Pilots', 'Guardrails', 'Handoffs', 'Prompts', 'Metrics', 'Roadmaps', 'Reviews', 'Budgets', 'Playbooks', 'Pipelines', 'Reports', 'Checklists'];
 const CLAIMS = ['need an owner', 'should start small', 'are a team sport', 'scale slower than expected', 'pay back late', 'fail quietly', 'deserve a checklist', 'work best in pairs'];
 const HEADINGS = ['What we would say', 'Why it matters', 'A closer look', 'What to do first'];
 const AUTHORS = ['Sample Author A', 'Sample Author B', 'Sample Author C', 'Sample Author D', 'Sample Author E'];
 
+const README = `# Sample POVs
+
+Everything in this folder is **fictional**. These POVs were generated to try out the library and the knowledge graph while the site is still being shaped. They say nothing about what the practice thinks.
+
+Each folder here is flagged as a sample by its location alone. On the site they carry a "Sample" tag, and a switch hides them.
+
+## Remove them all
+
+Delete this whole \`povs/samples\` folder. Then, in \`povs/topics.json\`, you can also delete the topics marked \`"sample": true\` (the site already hides them once no POV uses them).
+
+## Add your own
+
+Real POVs go in \`povs/<name>/pov.md\`, not here. See CONTRIBUTING.md.
+`;
+
 /**
- * Writes povs/topics.json and povs/sample-NN/ folders under `root`.
- * Creates files only: it never deletes anything.
+ * Writes samples under `<root>/povs/samples/`. In `merge` mode it adds the
+ * sample-only topics to an existing povs/topics.json instead of replacing it.
+ * Only creates files: it never deletes anything.
  */
-export function writeSamples(root, { count = 36, seed = 7 } = {}) {
+export function writeSamples(root, { count = 36, seed = 7, merge = false } = {}) {
   const rand = mulberry32(seed);
   const pick = (list) => list[Math.floor(rand() * list.length)];
   const povsDir = join(root, 'povs');
-  mkdirSync(povsDir, { recursive: true });
+  const samplesDir = join(povsDir, 'samples');
+  mkdirSync(samplesDir, { recursive: true });
 
-  const topics = TOPICS.map(([id, title, parent, related]) => ({
-    id, title,
-    view: 'SAMPLE TEXT: a fictional placeholder, not a position the practice holds.',
-    ...(parent ? { parent } : {}),
-    ...(related.length ? { related } : {}),
-  }));
-  writeFileSync(join(povsDir, 'topics.json'), JSON.stringify(topics, null, 2) + '\n');
+  // Topics: preview mode writes all ten; merge mode adds only the ones that are missing.
+  const topicsFile = join(povsDir, 'topics.json');
+  let topics = [];
+  if (merge && existsSync(topicsFile)) topics = JSON.parse(readFileSync(topicsFile, 'utf8'));
+  const have = new Set(topics.map((t) => t.id));
+  const wanted = new Set([...have, ...TOPICS.filter(([id, , , , sampleOnly]) => !have.has(id) && (!merge || sampleOnly)).map(([id]) => id)]);
+  let added = 0;
+  for (const [id, title, parent, related, sampleOnly] of TOPICS) {
+    if (have.has(id) || !wanted.has(id)) continue;
+    const t = { id, title, view: SAMPLE_VIEW };
+    if (parent && wanted.has(parent)) t.parent = parent;
+    const rel = related.filter((r) => wanted.has(r));
+    if (rel.length) t.related = rel;
+    if (sampleOnly) t.sample = true;
+    topics.push(t);
+    added += 1;
+  }
+  writeFileSync(topicsFile, JSON.stringify(topics, null, 2) + '\n');
 
-  const topicIds = TOPICS.map((t) => t[0]);
+  const topicIds = topics.map((t) => t.id);
   const width = String(count).length;
   const start = Date.UTC(2026, 0, 5);
   const slugs = [];
@@ -109,13 +149,14 @@ export function writeSamples(root, { count = 36, seed = 7 } = {}) {
       '',
     ].join('\n');
 
-    const dir = join(povsDir, slug);
+    const dir = join(samplesDir, slug);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'pov.md'), `${front}\n${body}`);
     if (withDoc) writeFileSync(join(dir, 'sample-notes.txt'), 'Fictional sample attachment. Not real content.\n');
     slugs.push(slug);
   }
-  return { count, topics: topics.length };
+  writeFileSync(join(samplesDir, 'README.md'), README);
+  return { count, topics: topics.length, addedTopics: added };
 }
 
 function main() {
@@ -126,12 +167,23 @@ function main() {
   };
   const fail = (msg) => { console.error(`make-samples: ${msg}`); process.exit(1); };
 
-  const count = Number(arg('--count', '36'));
+  const toRepo = argv.includes('--repo');
+  const count = Number(arg('--count', toRepo ? '120' : '36'));
   const seed = Number(arg('--seed', '7'));
   if (!Number.isInteger(count) || count < 1 || count > 500) fail('--count must be a whole number from 1 to 500');
   if (!Number.isInteger(seed) || seed < 0) fail('--seed must be a whole number, 0 or more');
+  if (toRepo && argv.includes('--out')) fail('use either --repo or --out, not both');
 
-  // This script deletes its output folder first, so it only accepts a folder
+  if (toRepo) {
+    if (existsSync(join(repo, 'povs', 'samples'))) fail('povs/samples already exists. Delete it first if you want to generate again.');
+    if (!existsSync(join(repo, 'povs', 'topics.json'))) fail('povs/topics.json is missing, so there is nothing to add topics to');
+    const made = writeSamples(repo, { count, seed, merge: true });
+    console.log(`make-samples: wrote ${made.count} fictional POVs to povs/samples/ and added ${made.addedTopics} sample-only topics to povs/topics.json`);
+    console.log('make-samples: to remove them all later, delete povs/samples/');
+    return;
+  }
+
+  // This mode deletes its output folder first, so it only accepts a folder
   // directly inside the project whose name starts with _samples.
   const out = resolve(repo, arg('--out', '_samples'));
   if (dirname(out) !== repo || !basename(out).startsWith('_samples')) {

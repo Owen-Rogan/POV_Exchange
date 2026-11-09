@@ -7,8 +7,13 @@
 //   node scripts/build.mjs --check   validate only, write nothing
 //   node scripts/build.mjs --root D  use D instead of the repo root (tests)
 //
-// Inputs:  povs/topics.json, povs/<slug>/pov.md (+ documents), site/
-// Outputs: dist/  = site/ + data/*.json + docs/<slug>/* + pov/<slug>/index.html
+// Inputs:  povs/topics.json, povs/<slug>/pov.md (+ documents), povs/samples/<slug>/pov.md, site/
+// Outputs: dist/  = site/ + data/*.json + data/pov/<slug>.json + docs/<slug>/* + pov/<slug>/index.html
+//
+// povs/samples/ holds fictional sample POVs. Every POV in it is flagged
+// `sample`, from its folder alone (never from front matter), so deleting that one
+// folder removes all of them. Topics marked "sample": true disappear by
+// themselves when no POV uses them.
 //
 // Errors name the file, the line and the rule. They never repeat the offending
 // text, because it may be something that should not be repeated (a token, an
@@ -25,8 +30,8 @@ import { normalise, splitFrontMatter } from './lib/frontmatter.mjs';
 import { computeLayout } from './lib/layout.mjs';
 import { parseBlocks } from './lib/markdown.mjs';
 import {
-  MARKERS, expandMarkers, filtersHtml, footerHtml, headTags, headerHtml, nodelistHtml,
-  posterHtml, povPage, sectionsHtml, statsHtml,
+  MARKERS, expandMarkers, filtersHtml, footerHtml, headTags, headerHtml, latestHtml, nodelistHtml,
+  povPage, previewHtml, posterHtml, sectionsHtml, statsHtml, tilesHtml,
 } from './lib/pages.mjs';
 import { scanText } from './lib/rules.mjs';
 
@@ -48,7 +53,7 @@ const TEXT_EXT = new Set(['csv', 'txt', 'md']);
 const MAX_DOC_BYTES = 20 * 1024 * 1024;
 const MAX_POV_BYTES = 200 * 1024;
 const POV_KEYS = new Set(['title', 'summary', 'type', 'topics', 'author', 'date', 'related', 'documents']);
-const TOPIC_KEYS = new Set(['id', 'title', 'view', 'parent', 'related']);
+const TOPIC_KEYS = new Set(['id', 'title', 'view', 'parent', 'related', 'sample']);
 const REPO = 'Owen-Rogan/POV_Exchange';
 
 const errors = [];
@@ -90,8 +95,10 @@ function loadTopics() {
     if (t.related !== undefined && (!Array.isArray(t.related) || t.related.some((r) => typeof r !== 'string'))) {
       report(file, 0, `${at} 'related' must be a list of topic ids`);
     }
+    if (t.sample !== undefined && typeof t.sample !== 'boolean') report(file, 0, `${at} 'sample' must be true or false`);
     topics.push({
       id, title, view,
+      sample: t.sample === true,
       parent: typeof t.parent === 'string' ? t.parent : null,
       related: Array.isArray(t.related) ? t.related.filter((r) => typeof r === 'string') : [],
     });
@@ -116,8 +123,8 @@ function loadTopics() {
 
 // ------------------------------------------------------------------ POVs
 
-function loadPov(slug, topicIds) {
-  const dir = `povs/${slug}`;
+function loadPov(slug, topicIds, base = 'povs', sample = false) {
+  const dir = `${base}/${slug}`;
   const file = `${dir}/pov.md`;
   if (!SLUG.test(slug) || slug.length > 60) {
     report(dir, 0, 'folder name must be lowercase letters, digits and hyphens (max 60 characters)');
@@ -220,7 +227,7 @@ function loadPov(slug, topicIds) {
 
   if (errors.length > before) return null;
   return {
-    slug, title, summary, author, date, type,
+    slug, title, summary, author, date, type, sample, dir,
     topics: topics.items, related: related.items, relatedLine: related.line, file,
     documents, blocks,
   };
@@ -230,12 +237,25 @@ function loadPovs(topicIds) {
   const povsDir = join(root, 'povs');
   if (!existsSync(povsDir)) { report('povs', 0, 'folder is missing'); return []; }
   const povs = [];
-  for (const e of readdirSync(povsDir, { withFileTypes: true }).sort(byName)) {
-    if (e.name === 'topics.json' || e.name === 'README.md' || e.name.startsWith('_') || e.name.startsWith('.')) continue;
-    if (!e.isDirectory()) { report(`povs/${e.name}`, 0, 'only topics.json and POV folders belong in povs/'); continue; }
-    const p = loadPov(e.name, topicIds);
-    if (p) povs.push(p);
-  }
+  const taken = new Set();
+
+  const readContainer = (base, sample) => {
+    for (const e of readdirSync(join(root, base), { withFileTypes: true }).sort(byName)) {
+      if (e.name === 'README.md' || e.name.startsWith('_') || e.name.startsWith('.')) continue;
+      if (!sample && e.name === 'topics.json') continue;
+      if (!sample && e.name === 'samples' && e.isDirectory()) { readContainer('povs/samples', true); continue; }
+      if (!e.isDirectory()) {
+        report(`${base}/${e.name}`, 0, sample ? 'only POV folders belong in povs/samples/' : 'only topics.json and POV folders belong in povs/');
+        continue;
+      }
+      if (taken.has(e.name)) { report(`${base}/${e.name}`, 0, 'folder name is already used by another POV (names must be unique, including samples)'); continue; }
+      taken.add(e.name);
+      const p = loadPov(e.name, topicIds, base, sample);
+      if (p) povs.push(p);
+    }
+  };
+  readContainer('povs', false);
+
   const slugs = new Set(povs.map((p) => p.slug));
   for (const p of povs) {
     for (const r of p.related) {
@@ -244,6 +264,18 @@ function loadPovs(topicIds) {
     }
   }
   return povs;
+}
+
+/** Topics marked "sample" that no POV uses are dropped, so removing povs/samples/ also removes them. */
+function pruneTopics(all, povs) {
+  const used = new Set(povs.flatMap((p) => p.topics));
+  const kept = all.filter((t) => !t.sample || used.has(t.id));
+  const ids = new Set(kept.map((t) => t.id));
+  return kept.map((t) => ({
+    ...t,
+    parent: t.parent && ids.has(t.parent) ? t.parent : null,
+    related: t.related.filter((r) => ids.has(r)),
+  }));
 }
 
 // -------------------------------------------------------------- data files
@@ -259,19 +291,22 @@ function buildGraph(topics, povs) {
     edges.push({ s, t, k });
   };
   const counts = new Map(topics.map((t) => [t.id, 0]));
-  for (const p of povs) for (const id of p.topics) counts.set(id, counts.get(id) + 1);
+  const realUse = new Map(topics.map((t) => [t.id, 0]));
+  for (const p of povs) for (const id of p.topics) { counts.set(id, counts.get(id) + 1); if (!p.sample) realUse.set(id, realUse.get(id) + 1); }
 
   for (const t of topics) {
-    nodes.push({ id: `t:${t.id}`, kind: 'topic', ref: t.id, label: t.title, n: counts.get(t.id) });
+    // A topic is sample-only when it is flagged and no real POV uses it, so hiding samples hides it too.
+    const sampleOnly = t.sample && realUse.get(t.id) === 0;
+    nodes.push({ id: `t:${t.id}`, kind: 'topic', ref: t.id, label: t.title, n: counts.get(t.id), ...(sampleOnly ? { sample: true } : {}) });
     if (t.parent) edge(`t:${t.id}`, `t:${t.parent}`, 'parent');
     for (const r of t.related) edge(`t:${t.id}`, `t:${r}`, 'topic');
   }
   for (const p of povs) {
-    nodes.push({ id: `p:${p.slug}`, kind: 'pov', ref: p.slug, label: p.title, date: p.date });
+    nodes.push({ id: `p:${p.slug}`, kind: 'pov', ref: p.slug, label: p.title, date: p.date, ...(p.sample ? { sample: true } : {}) });
     for (const id of p.topics) edge(`p:${p.slug}`, `t:${id}`, 'link');
     for (const r of p.related) edge(`p:${p.slug}`, `p:${r}`, 'related');
     for (const d of p.documents) {
-      nodes.push({ id: `d:${p.slug}/${d.name}`, kind: 'doc', ref: p.slug, label: d.name });
+      nodes.push({ id: `d:${p.slug}/${d.name}`, kind: 'doc', ref: p.slug, label: d.name, date: p.date, ...(p.sample ? { sample: true } : {}) });
       edge(`d:${p.slug}/${d.name}`, `p:${p.slug}`, 'doc');
     }
   }
@@ -283,7 +318,7 @@ function buildGraph(topics, povs) {
 // ------------------------------------------------------------------- main
 
 // Pages in site/ that contain <!-- build:name --> markers the build expands.
-const TEMPLATE_PAGES = ['index.html', '404.html', 'add/index.html'];
+const TEMPLATE_PAGES = ['index.html', 'graph/index.html', '404.html', 'add/index.html'];
 // Pure modules the browser reuses, so the Add page checks text exactly as the build does.
 const SHARED_MODULES = ['frontmatter.mjs', 'markdown.mjs', 'rules.mjs'];
 
@@ -299,14 +334,18 @@ function validateSite() {
   if (existsSync(join(root, 'site/index.html')) && !/<!-- build:sections[ >-]/.test(readText('site/index.html'))) {
     report('site/index.html', 0, 'must contain the <!-- build:sections --> marker');
   }
-  for (const reserved of ['data', 'docs', 'pov']) {
+  if (existsSync(join(root, 'site/graph/index.html')) && !/<!-- build:nodelist[ >-]/.test(readText('site/graph/index.html'))) {
+    report('site/graph/index.html', 0, 'must contain the <!-- build:nodelist --> marker');
+  }
+  for (const reserved of ['data', 'docs', 'pov', 'samples']) {
     if (existsSync(join(siteDir, reserved))) report(`site/${reserved}`, 0, 'is a name the build generates; rename or remove it');
   }
 }
 
 validateSite();
-const topics = loadTopics();
-const povs = loadPovs(new Set(topics.map((t) => t.id)));
+const allTopics = loadTopics();
+const povs = loadPovs(new Set(allTopics.map((t) => t.id)));
+const topics = pruneTopics(allTopics, povs);
 povs.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : a.slug < b.slug ? -1 : 1));
 
 if (errors.length) {
@@ -317,8 +356,10 @@ if (errors.length) {
 }
 
 const docCount = povs.reduce((n, p) => n + p.documents.length, 0);
+const sampleCount = povs.filter((p) => p.sample).length;
+const sampleNote = sampleCount ? `, ${sampleCount} of them samples` : '';
 if (checkOnly) {
-  console.log(`build: check passed (${povs.length} POVs, ${topics.length} topics, ${docCount} documents)`);
+  console.log(`build: check passed (${povs.length} POVs, ${topics.length} topics, ${docCount} documents${sampleNote})`);
   process.exit(0);
 }
 
@@ -341,9 +382,12 @@ const fns = {
   header: ({ up = '', current = '' }) => headerHtml(up, current),
   footer: () => footerHtml(),
   poster: () => posterHtml(graph),
+  preview: () => previewHtml(graph),
+  tiles: () => tilesHtml(topics, povs),
   stats: () => statsHtml(topics, povs),
   filters: () => filtersHtml(topics),
   sections: () => sectionsHtml(topics, povs),
+  latest: () => latestHtml(topics, povs),
   nodelist: () => nodelistHtml(topics, povs),
   repo: () => REPO,
 };
@@ -352,11 +396,18 @@ for (const rel of TEMPLATE_PAGES) write(rel, expandMarkers(readText(`site/${rel}
 // Data for the browser.
 const counts = new Map(topics.map((t) => [t.id, 0]));
 for (const p of povs) for (const id of p.topics) counts.set(id, counts.get(id) + 1);
-write('data/topics.json', JSON.stringify(topics.map((t) => ({ ...t, count: counts.get(t.id) }))) + '\n');
+const sampleOnlyTopic = new Set(graph.nodes.filter((n) => n.kind === 'topic' && n.sample).map((n) => n.ref));
+write('data/topics.json', JSON.stringify(topics.map((t) => ({
+  id: t.id, title: t.title, view: t.view, parent: t.parent, related: t.related, count: counts.get(t.id),
+  ...(sampleOnlyTopic.has(t.id) ? { sample: true } : {}),
+}))) + '\n');
 write('data/povs.json', JSON.stringify(povs.map((p) => ({
   slug: p.slug, title: p.title, summary: p.summary, type: p.type, author: p.author, date: p.date,
   topics: p.topics, related: p.related, documents: p.documents,
+  ...(p.sample ? { sample: true } : {}),
 }))) + '\n');
+// Full text for the Graph page reader, fetched one POV at a time so povs.json stays small.
+for (const p of povs) write(`data/pov/${p.slug}.json`, JSON.stringify({ slug: p.slug, blocks: p.blocks, documents: p.documents }) + '\n');
 write('data/graph.json', JSON.stringify(graph) + '\n');
 
 // Shared validation modules for the Add page.
@@ -367,8 +418,8 @@ for (const p of povs) {
   write(`pov/${p.slug}/index.html`, povPage(p, { topicById, povBySlug, graph }));
   for (const d of p.documents) {
     mkdirSync(join(distDir, 'docs', p.slug), { recursive: true });
-    copyFileSync(join(root, 'povs', p.slug, d.name), join(distDir, 'docs', p.slug, d.name));
+    copyFileSync(join(root, p.dir, d.name), join(distDir, 'docs', p.slug, d.name));
   }
 }
 
-console.log(`build: wrote dist/ (${povs.length} POVs, ${topics.length} topics, ${docCount} documents)`);
+console.log(`build: wrote dist/ (${povs.length} POVs, ${topics.length} topics, ${docCount} documents${sampleNote})`);

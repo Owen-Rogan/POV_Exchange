@@ -1,13 +1,19 @@
-// Pieces shared by the 3D and 2D graph renderers: how big a node is, which
-// nodes are lit or dimmed, the intro timing, hit testing, tooltip and labels.
+// Pieces shared by the 3D and 2D renderers and the engine: node sizes, colours,
+// which nodes are lit or dimmed, the intro timing, hit testing, and the tooltip.
 
 import { neighbourSet } from './graph-data.js';
 
-const DIAMETER = { topic: 12, pov: 6.5, doc: 3.4 };
+const SIZE = { topic: 12, pov: 6.5, doc: 3.4 };
 
+/** World-space size of a node. Bigger topics for busier topics. */
 export function diameter(node) {
-  const base = DIAMETER[node.kind] ?? 5;
+  const base = SIZE[node.kind] ?? 5;
   return node.kind === 'topic' ? base + Math.min(node.n ?? 0, 6) * 1.1 : base;
+}
+
+/** Core diameter in CSS pixels for a node of `size` at `ppu` pixels per world unit. Shared by both renderers. */
+export function nodePixels(size, ppu) {
+  return clamp(size * 0.31 * ppu, 2.4, 60);
 }
 
 /** Colours come from CSS custom properties, so light and dark stay in one place. */
@@ -70,19 +76,19 @@ export function computeTargets(model, { hover, selected, focus }) {
   return { nodes, edges, active };
 }
 
-/** Where the graph sits so it clears the headline: right of it on wide screens; on narrow screens it has its own area. */
-export function layoutShift(width, height) {
-  return width >= 900 ? { dx: width * 0.17, dy: 0 } : { dx: 0, dy: 0 };
-}
-
-/** The node under (x, y), if any. Points are { id, x, y, r, ok }. */
+/**
+ * The node under (x, y), if any. Points are { id, x, y, r, ok, depth }.
+ * The closest centre wins; when two are about equally close the one nearer the camera wins.
+ */
 export function nearest(points, x, y, slack = 10) {
   let best = null;
-  let bestD = Infinity;
+  let bestScore = Infinity;
   for (const p of points) {
     if (!p.ok) continue;
     const d = Math.hypot(p.x - x, p.y - y);
-    if (d <= p.r + slack && d < bestD) { best = p.id; bestD = d; }
+    if (d > p.r + slack) continue;
+    const score = d + (p.depth ?? 0) * 0.002;
+    if (score < bestScore) { best = p.id; bestScore = score; }
   }
   return best;
 }
@@ -108,46 +114,64 @@ export function createTip(stage) {
   };
 }
 
-/** Topic names drawn as HTML over the canvas, so the text stays crisp. */
-export function createLabels(stage, model) {
+/**
+ * Labels drawn as HTML over the canvas, so text stays crisp. A small pool of
+ * elements is reused: `place(chosen)` takes a Map of node index -> {x, y} (from
+ * chooseLabels) and shows exactly those.
+ */
+export function createLabelLayer(stage, model) {
   const layer = document.createElement('div');
   layer.className = 'hero-labels';
   layer.setAttribute('aria-hidden', 'true');
-  const items = [];
-  model.nodes.forEach((n, i) => {
-    if (n.kind !== 'topic') return;
-    const el = document.createElement('div');
-    el.className = 'hero-label';
-    el.textContent = n.label;
-    layer.append(el);
-    items.push({ i, el, key: '', w: 0, h: 0, topicSize: n.n ?? 0 });
-  });
   stage.append(layer);
-  // Busiest topics win when two labels would overlap; ties keep a stable order.
-  const byPriority = [...items].sort((a, b) => b.topicSize - a.topicSize || a.i - b.i);
-  const GAP = 4; // pixels of breathing room between labels
+  const free = [];
+  const used = new Map(); // node index -> { el, key }
+
+  const clip = (text, max) => {
+    const chars = Array.from(text);
+    return chars.length > max ? chars.slice(0, max - 1).join('') + '\u2026' : text;
+  };
+  const take = () => {
+    const el = free.pop() ?? document.createElement('div');
+    if (!el.parentNode) layer.append(el);
+    return el;
+  };
+
   return {
-    /** screen[i] = { x, y, r, a } in CSS pixels; a is 0..1 opacity. */
-    update(screen) {
-      const placed = [];
-      for (const it of byPriority) {
-        const s = screen[it.i];
-        let key = 'off';
-        if (s && s.a > 0.02) {
-          if (!it.w) { it.w = it.el.offsetWidth; it.h = it.el.offsetHeight; } // measured once, after first layout
-          const x = Math.round(s.x), y = Math.round(s.y + s.r + 4);
-          const box = { x0: x - it.w / 2 - GAP, x1: x + it.w / 2 + GAP, y0: y - GAP, y1: y + it.h + GAP };
-          const clash = placed.some((p) => box.x0 < p.x1 && p.x0 < box.x1 && box.y0 < p.y1 && p.y0 < box.y1);
-          if (!clash) { placed.push(box); key = `${x},${y},${s.a.toFixed(2)}`; }
+    place(chosen) {
+      for (const [i, entry] of used) {
+        if (!chosen.has(i)) {
+          entry.el.style.opacity = '0';
+          entry.el.hidden = true;
+          free.push(entry.el);
+          used.delete(i);
         }
-        if (key === it.key) continue;
-        it.key = key;
-        if (key === 'off') { it.el.style.opacity = '0'; continue; }
-        const [x, y] = key.split(',');
-        it.el.style.transform = `translate(${x}px, ${y}px) translateX(-50%)`;
-        it.el.style.opacity = s.a.toFixed(2);
+      }
+      for (const [i, pos] of chosen) {
+        let entry = used.get(i);
+        if (!entry) {
+          const node = model.nodes[i];
+          const el = take();
+          el.hidden = false;
+          el.className = `hero-label l-${node.kind}`;
+          el.textContent = clip(node.label, node.kind === 'topic' ? 40 : 34);
+          entry = { el, key: '' };
+          used.set(i, entry);
+        }
+        const key = `${pos.x},${pos.y}`;
+        if (key !== entry.key) {
+          entry.key = key;
+          entry.el.style.transform = `translate(${pos.x}px, ${pos.y}px) translateX(-50%)`;
+        }
+        entry.el.style.opacity = '1';
       }
     },
     remove() { layer.remove(); },
   };
+}
+
+/** Estimated label box for collision checks, without measuring the DOM each frame. */
+export function labelBox(kind, label) {
+  const chars = Math.min(Array.from(label).length, kind === 'topic' ? 40 : 34);
+  return kind === 'topic' ? { w: chars * 8.6 + 6, h: 16 } : { w: chars * 6.6 + 6, h: 15 };
 }

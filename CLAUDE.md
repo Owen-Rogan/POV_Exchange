@@ -15,14 +15,15 @@ povs/topics.json        curated topics (the curation lives here)
 povs/<slug>/pov.md      a POV: front matter + restricted markdown
 povs/<slug>/*.pdf ...   optional documents beside it
 povs/_template/         skipped by the build (folders starting "_")
-site/                   front end, copied to dist/ (index, add/, 404, styles, js/, fonts/, vendor/)
-site/js/                browser modules: tier, graph3d (WebGL), graph2d (canvas), panel, explore, add ...
+povs/samples/<slug>/    fictional sample POVs, flagged `sample` by their folder alone; delete povs/samples/ to remove them all
+site/                   front end, copied to dist/ (index = Library, graph/, add/, 404, styles, js/, fonts/, vendor/)
+site/js/                browser modules (see Front end below)
 site/vendor/three/      three.js r187 (three.module.js + three.core.js, MIT), committed so CI needs no npm
 site/fonts/             IBM Plex Sans 300/400/600 and Mono 400 (SIL OFL), committed
 scripts/build.mjs       validate + build -> dist/
 scripts/lib/            front matter, markdown, text rules, graph layout, page and svg builders
 scripts/test.mjs        build tests (node --test scripts/test.mjs)
-scripts/make-samples.mjs  builds N fictional POVs into _samples/ (git-ignored) to preview the graph at scale
+scripts/make-samples.mjs  fictional POVs: preview into _samples/ (git-ignored), or --repo to write povs/samples/
 scripts/serve.mjs       local preview, 127.0.0.1 only
 CONTRIBUTING.md         how to add a POV
 .github/workflows/      pages.yml
@@ -44,11 +45,16 @@ node scripts/serve.mjs --prefix /POV_Exchange  # http://127.0.0.1:8080/POV_Excha
 
 ## Front end
 
-- Three tiers, chosen in `site/js/tier.js`: `full` (WebGL), `lite` (2D canvas), `static` (the SVG poster already in the HTML). Reduced motion or no canvas is always `static`. Force one with `#tier=full|lite|static`.
-- Node positions are precomputed by the build (`data/graph.json`); the browser never simulates physics.
+- Two pages: **Library** (`/`: tiles, search, By topic / Newest first, still graph preview, no 3D) and **Graph** (`/graph/`: full-screen explorable graph with a reader panel, filters, timeline, tour).
+- Graph engine: `graph-engine.js` owns the camera (`camera.js`, pure maths), input (`controls.js`), label choice (`labels.js`) and the frame loop. A *painter* only draws: `graph3d.js` (WebGL) or `graph2d.js` (canvas). Both read the screen positions the engine computes, so hit-testing and drawing always agree.
+- Three tiers, chosen in `site/js/tier.js`: `full` (WebGL), `lite` (2D canvas), `static` (the SVG poster plus the list). Reduced motion keeps the graph interactive but stops it moving by itself; only a device that cannot draw gets `static`. Force one with `#tier=full|lite|static`.
+- Node positions are precomputed by the build (`data/graph.json`); the browser never simulates physics. Each POV's text is in `data/pov/<slug>.json`, fetched when the reader opens it.
+- URL state on the Graph page: `#n=<node id>`, `#t=<topic>`, `#q=<text>`, `#samples=0`.
+- Pure, tested modules: `graph-filter.js`, `timeline.js`, `tour.js`, `labels.js`, `camera.js`, `graph-data.js`, `render-blocks.js`.
 - Pages are templates in `site/` with `<!-- build:name -->` markers that `scripts/build.mjs` expands. Add a marker in both `lib/pages.mjs` (`MARKERS`) and the `fns` table in `build.mjs`.
 - `site/js/shared/*.js` in `dist/` are copies of `scripts/lib/{frontmatter,markdown,rules}.mjs`, so the Add page checks text exactly as the build does. Edit the originals only.
 - Vendored three.js was fetched with `npm pack three@0.187.0` and checked against the registry hash `sha512-Qiu7R+Cmh8CstZsY1uJOSWnVlfo7ZtNLV7mF8Jltk3LB3AtDu9cRZlcnRKkAk8Y4z6KKw35z7Y7Urd7jWY8etA==` before use. To upgrade, repeat that and replace both files together (they must be the same version).
+- Preview quirk: an unfocused preview window never fires animation frames, so the graph can look frozen there. Code that must start the page uses a timer fallback (see `afterPaint` in `main.js`).
 - Source files are plain ASCII. Write special characters as `\uXXXX` escapes (a test enforces this).
 
 ## Security conventions

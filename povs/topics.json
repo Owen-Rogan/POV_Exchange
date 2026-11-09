@@ -9,7 +9,9 @@
     "title": "Agents",
     "view": "PLACEHOLDER: replace with the practice's house view on this topic (one or two sentences).",
     "parent": "ai-strategy",
-    "related": ["governance"]
+    "related": [
+      "governance"
+    ]
   },
   {
     "id": "governance",
@@ -22,6 +24,63 @@
     "title": "Data foundations",
     "view": "PLACEHOLDER: replace with the practice's house view on this topic (one or two sentences).",
     "parent": "ai-strategy",
-    "related": ["agents"]
+    "related": [
+      "agents"
+    ]
+  },
+  {
+    "id": "evaluation",
+    "title": "Evaluation and testing",
+    "view": "SAMPLE TEXT: a fictional placeholder, not a position the practice holds.",
+    "parent": "ai-strategy",
+    "related": [
+      "agents"
+    ],
+    "sample": true
+  },
+  {
+    "id": "operating-model",
+    "title": "Operating model",
+    "view": "SAMPLE TEXT: a fictional placeholder, not a position the practice holds.",
+    "parent": "ai-strategy",
+    "related": [
+      "workforce"
+    ],
+    "sample": true
+  },
+  {
+    "id": "workforce",
+    "title": "Workforce and skills",
+    "view": "SAMPLE TEXT: a fictional placeholder, not a position the practice holds.",
+    "related": [
+      "adoption"
+    ],
+    "sample": true
+  },
+  {
+    "id": "adoption",
+    "title": "Adoption and change",
+    "view": "SAMPLE TEXT: a fictional placeholder, not a position the practice holds.",
+    "parent": "workforce",
+    "sample": true
+  },
+  {
+    "id": "security",
+    "title": "Security",
+    "view": "SAMPLE TEXT: a fictional placeholder, not a position the practice holds.",
+    "parent": "governance",
+    "related": [
+      "agents"
+    ],
+    "sample": true
+  },
+  {
+    "id": "platforms",
+    "title": "Platforms and tooling",
+    "view": "SAMPLE TEXT: a fictional placeholder, not a position the practice holds.",
+    "related": [
+      "data-foundations"
+    ],
+    "sample": true
   }
 ]

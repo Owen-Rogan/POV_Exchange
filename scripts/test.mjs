@@ -4,11 +4,11 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { after, test } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const buildScript = join(repo, 'scripts', 'build.mjs');
@@ -296,14 +296,19 @@ test('asset paths are relative at every depth, and absolute only on 404.html', (
   assert.match(read('404.html'), /href="\/POV_Exchange\/styles\.css"/);
 });
 
-test('the home page has a poster svg, the list view, and a card per POV', () => {
+test('the library page has a still graph preview, topic tiles, both orderings and the stats', () => {
   const { read } = built(TWO());
   const home = read('index.html');
-  assert.match(home, /<svg class="poster-svg"[^>]*aria-hidden="true"/);
-  assert.equal((home.match(/class="card reveal"/g) ?? []).length, 3); // alpha under 1 topic, beta under 2
-  assert.match(home, /id="nodelist"/);
+  assert.match(home, /<a class="preview" href="graph\/"[^>]*><svg class="preview-svg"[^>]*aria-hidden="true"/);
+  assert.ok(!home.includes('<canvas'), 'the library must not start the 3D graph');
+  // by topic: alpha under 1 topic, beta under 2 = 3 cards; newest first: each once = 2 cards
+  assert.equal((home.match(/class="card reveal[^"]*"/g) ?? []).length, 5);
+  assert.match(home, /<section class="newest" id="newest"[^>]*hidden>/);
+  assert.match(home, /class="tile reveal" data-topic="agents"/);
+  assert.match(home, /href="graph\/#t=agents"/);
   assert.match(home, /<noscript>/);
-  assert.match(home, /2 POVs &middot; 2 topics &middot; 0 documents/);
+  assert.match(home, /data-stat="povs" data-all="2" data-real="2"[^>]*>2 POVs<\/span>/);
+  assert.match(home, /data-stat="topics"[^>]*>2 topics<\/span>/);
 });
 
 test('a POV page has a where-this-sits map with links, and related links', () => {
@@ -430,9 +435,10 @@ test('sample content is clearly fictional and never reaches the real povs/ folde
   const root = mkdtempSync(join(tmpdir(), 'pov-fiction-'));
   made.push(root);
   writeSamples(root, { count: 5 });
-  const text = readFileSync(join(root, 'povs/sample-1/pov.md'), 'utf8');
+  const text = readFileSync(join(root, 'povs/samples/sample-1/pov.md'), 'utf8');
   assert.match(text, /fictional sample/);
   assert.match(readFileSync(join(root, 'povs/topics.json'), 'utf8'), /SAMPLE TEXT/);
+  assert.match(readFileSync(join(root, 'povs/samples/README.md'), 'utf8'), /fictional/);
 });
 
 test('make-samples refuses an output folder that could hold real content', () => {
@@ -449,4 +455,459 @@ test('make-samples refuses an output folder that could hold real content', () =>
     assert.equal(r.status, 1, `--count ${bad} was accepted`);
   }
   assert.equal(listing(), before, 'povs/ changed');
+});
+
+// ------------------------------------------------------ samples + graph page
+
+function sampleFixture(realPovs = {}, samples = {}, topics = TOPICS) {
+  const root = fixture(realPovs, { topics });
+  mkdirSync(join(root, 'povs/samples'), { recursive: true });
+  for (const [slug, files] of Object.entries(samples)) {
+    mkdirSync(join(root, 'povs/samples', slug), { recursive: true });
+    for (const [name, content] of Object.entries(files)) writeFileSync(join(root, 'povs/samples', slug, name), content);
+  }
+  return root;
+}
+
+test('povs in povs/samples/ build as samples, and are flagged everywhere', () => {
+  const root = sampleFixture({ real: pov('Real.') }, { fake: pov('Fake.', { title: 'A sample' }) });
+  const r = run(root);
+  assert.equal(r.code, 0, r.all);
+  assert.match(r.out, /2 POVs.*1 of them samples/);
+  const povs = JSON.parse(readFileSync(join(root, 'dist/data/povs.json'), 'utf8'));
+  assert.equal(povs.find((p) => p.slug === 'fake').sample, true);
+  assert.equal(povs.find((p) => p.slug === 'real').sample, undefined);
+  const g = JSON.parse(readFileSync(join(root, 'dist/data/graph.json'), 'utf8'));
+  assert.equal(g.nodes.find((n) => n.id === 'p:fake').sample, true);
+  const page = readFileSync(join(root, 'dist/pov/fake/index.html'), 'utf8');
+  assert.match(page, /class="sample-note"/);
+  assert.match(page, /Open in graph/);
+  assert.match(readFileSync(join(root, 'dist/index.html'), 'utf8'), /data-slug="fake"[^>]*data-sample="1"/);
+});
+
+test('a sample flag in front matter is rejected: only the folder decides', () => {
+  const root = sampleFixture({}, { fake: pov('x', { sample: 'false' }) });
+  assert.equal(run(root, '--check').code, 1);
+});
+
+test('the same folder name in povs/ and povs/samples/ is refused', () => {
+  const root = sampleFixture({ twin: pov() }, { twin: pov() });
+  const r = run(root, '--check');
+  assert.equal(r.code, 1);
+  assert.match(r.err, /already used by another POV/);
+});
+
+test('a stray file inside povs/samples/ is refused, but README.md is ignored', () => {
+  const root = sampleFixture({ real: pov() }, { fake: pov() });
+  writeFileSync(join(root, 'povs/samples/README.md'), '# fictional');
+  assert.equal(run(root, '--check').code, 0);
+  writeFileSync(join(root, 'povs/samples/notes.txt'), 'x');
+  const r = run(root, '--check');
+  assert.equal(r.code, 1);
+  assert.match(r.err, /only POV folders belong in povs\/samples\//);
+});
+
+test('sample-only topics disappear when there are no samples, and stay when there are', () => {
+  const topics = [{ id: 'agents', title: 'Agents', view: 'v' }, { id: 'extra', title: 'Extra', view: 'v', sample: true, parent: 'agents' }];
+  const without = sampleFixture({ real: pov() }, {}, topics);
+  assert.equal(run(without).code, 0);
+  const t1 = JSON.parse(readFileSync(join(without, 'dist/data/topics.json'), 'utf8'));
+  assert.deepEqual(t1.map((t) => t.id), ['agents']);
+
+  const withSamples = sampleFixture({ real: pov() }, { fake: pov('x', { topics: '[extra]' }) }, topics);
+  assert.equal(run(withSamples).code, 0);
+  const t2 = JSON.parse(readFileSync(join(withSamples, 'dist/data/topics.json'), 'utf8'));
+  assert.deepEqual(t2.map((t) => t.id), ['agents', 'extra']);
+  assert.equal(t2.find((t) => t.id === 'extra').sample, true);
+  const g = JSON.parse(readFileSync(join(withSamples, 'dist/data/graph.json'), 'utf8'));
+  assert.equal(g.nodes.find((n) => n.id === 't:extra').sample, true);
+  assert.equal(g.nodes.find((n) => n.id === 't:agents').sample, undefined);
+});
+
+test('a flagged topic that a real POV uses is not treated as sample-only', () => {
+  const topics = [{ id: 'agents', title: 'Agents', view: 'v', sample: true }];
+  const root = sampleFixture({ real: pov() }, { fake: pov() }, topics);
+  assert.equal(run(root).code, 0);
+  const g = JSON.parse(readFileSync(join(root, 'dist/data/graph.json'), 'utf8'));
+  assert.equal(g.nodes.find((n) => n.id === 't:agents').sample, undefined);
+});
+
+test('document nodes carry their POV date and sample flag', () => {
+  const root = sampleFixture({}, { fake: { ...pov('x', { documents: '[n.txt]' }), 'n.txt': 'notes' } });
+  assert.equal(run(root).code, 0);
+  const g = JSON.parse(readFileSync(join(root, 'dist/data/graph.json'), 'utf8'));
+  const doc = g.nodes.find((n) => n.kind === 'doc');
+  assert.equal(doc.date, '2026-11-06');
+  assert.equal(doc.sample, true);
+  assert.ok(readFileSync(join(root, 'dist/docs/fake/n.txt'), 'utf8') === 'notes');
+});
+
+test('each POV gets its own body file with parsed blocks and documents', () => {
+  const root = sampleFixture({ real: pov('Hello **there**.\n\n- one\n- two') });
+  assert.equal(run(root).code, 0);
+  const body = JSON.parse(readFileSync(join(root, 'dist/data/pov/real.json'), 'utf8'));
+  assert.equal(body.slug, 'real');
+  assert.deepEqual(body.blocks.map((b) => b.t), ['p', 'ul']);
+  assert.ok(!JSON.stringify(body).includes('<'), 'body data holds no markup');
+  const index = readFileSync(join(root, 'dist/data/povs.json'), 'utf8');
+  assert.ok(!index.includes('Hello'), 'povs.json stays small: no body text');
+});
+
+test('the graph page is built with a list of every node, the CSP and relative paths', () => {
+  const root = sampleFixture({ real: pov('Body.') }, { fake: { ...pov('x', { documents: '[n.txt]' }), 'n.txt': 'n' } });
+  assert.equal(run(root).code, 0);
+  const html = readFileSync(join(root, 'dist/graph/index.html'), 'utf8');
+  assert.match(html, /href="\.\.\/styles\.css"/);
+  assert.match(html, /Content-Security-Policy" content="default-src 'none'/);
+  assert.match(html, /class="gp" data-tier="static"/);
+  assert.match(html, /data-node="p:real"/);
+  assert.match(html, /data-node="p:fake"/);
+  assert.match(html, /data-node="d:fake\/n\.txt"/);
+  assert.match(html, /href="\.\.\/pov\/fake\/"/);
+  assert.match(html, /href="\.\.\/docs\/fake\/n\.txt"/);
+  assert.match(html, /aria-current="page">Graph<\/a>/);
+  assert.ok(!html.includes('<!-- build:'));
+  for (const page of ['index.html', 'add/index.html', 'pov/real/index.html']) {
+    assert.match(readFileSync(join(root, 'dist', page), 'utf8'), />Graph<\/a>/, `${page} links to the graph`);
+  }
+});
+
+test('the real project builds with a graph page and its own pages', () => {
+  const r = spawnSync(process.execPath, [buildScript, '--check'], { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+});
+
+// --------------------------------------------------------- pure browser modules
+
+const modUrl = (name) => pathToFileURL(join(repo, 'site/js', name)).href;
+
+const MODEL_GRAPH = {
+  newest: 'a',
+  nodes: [
+    { id: 't:agents', kind: 'topic', ref: 'agents', label: 'Agents', n: 2 },
+    { id: 't:gov', kind: 'topic', ref: 'gov', label: 'Governance', n: 1, sample: true },
+    { id: 'p:a', kind: 'pov', ref: 'a', label: 'Agents need an owner', date: '2026-03-01' },
+    { id: 'p:b', kind: 'pov', ref: 'b', label: 'Budgets', date: '2026-01-10', sample: true },
+    { id: 'p:c', kind: 'pov', ref: 'c', label: 'Third one', date: '2026-02-01' },
+    { id: 'd:a/x.pdf', kind: 'doc', ref: 'a', label: 'x.pdf', date: '2026-03-01' },
+  ],
+  edges: [
+    { s: 'p:a', t: 't:agents', k: 'link' }, { s: 'p:c', t: 't:agents', k: 'link' },
+    { s: 'p:b', t: 't:gov', k: 'link' }, { s: 'p:b', t: 't:agents', k: 'link' },
+    { s: 'p:a', t: 'p:c', k: 'related' }, { s: 'd:a/x.pdf', t: 'p:a', k: 'doc' },
+  ],
+};
+const POVS = new Map([
+  ['a', { title: 'Agents need an owner', summary: 'Owner matters', author: 'Ann', topics: ['agents'] }],
+  ['b', { title: 'Budgets', summary: 'Money talk', author: 'Bob', topics: ['gov', 'agents'], sample: true }],
+  ['c', { title: 'Third one', summary: 'Plain', author: 'Cy', topics: ['agents'] }],
+]);
+const TOPICS_BY_ID = new Map([['agents', { title: 'Agents', view: 'About agents.' }], ['gov', { title: 'Governance', view: 'About governance.' }]]);
+
+test('graph-data: connections group a node\'s neighbours sensibly', async () => {
+  const { withIndex, connections } = await import(modUrl('graph-data.js'));
+  const model = withIndex(MODEL_GRAPH);
+  const pov = connections(model, 'p:a');
+  assert.deepEqual(pov.topics, ['t:agents']);
+  assert.deepEqual(pov.related, ['p:c']);
+  assert.deepEqual(pov.docs, ['d:a/x.pdf']);
+  assert.deepEqual(pov.siblings, ['p:b']); // same topic, not already related
+  const topic = connections(model, 't:agents');
+  assert.deepEqual(topic.povs, ['p:a', 'p:c', 'p:b'].sort((x, y) => (model.byId.get(x).date < model.byId.get(y).date ? 1 : -1)));
+  assert.equal(connections(model, 'd:a/x.pdf').pov, 'p:a');
+  assert.deepEqual(connections(model, 'nope').topics, []);
+});
+
+test('graph-filter: search, topic, samples and the date cut-off', async () => {
+  const { withIndex } = await import(modUrl('graph-data.js'));
+  const { applyFilters, focusSet, edgeVisibility } = await import(modUrl('graph-filter.js'));
+  const model = withIndex(MODEL_GRAPH);
+  const ids = (res, which) => model.nodes.filter((n, i) => res[which][i]).map((n) => n.id);
+  const base = { q: '', topic: '', samples: true, until: null };
+
+  let r = applyFilters(model, POVS, TOPICS_BY_ID, base);
+  assert.equal(r.active, false);
+  assert.equal(ids(r, 'visible').length, 6);
+  assert.equal(focusSet(model, r), null);
+
+  r = applyFilters(model, POVS, TOPICS_BY_ID, { ...base, samples: false });
+  assert.ok(!ids(r, 'visible').includes('p:b') && !ids(r, 'visible').includes('t:gov'));
+  const ev = edgeVisibility(model, r);
+  assert.equal(ev[model.edges.findIndex((e) => e.s === 'p:b' && e.t === 't:gov')], 0);
+
+  r = applyFilters(model, POVS, TOPICS_BY_ID, { ...base, q: 'owner' });
+  assert.deepEqual(ids(r, 'matched').sort(), ['d:a/x.pdf', 'p:a', 't:agents'].sort());
+
+  r = applyFilters(model, POVS, TOPICS_BY_ID, { ...base, q: 'AGENTS money' }); // every word must match, case-insensitively
+  assert.deepEqual(ids(r, 'matched').filter((id) => id.startsWith('p:')), ['p:b']);
+
+  r = applyFilters(model, POVS, TOPICS_BY_ID, { ...base, topic: 'gov' });
+  assert.deepEqual(ids(r, 'matched').filter((id) => id.startsWith('p:')), ['p:b']);
+  assert.ok(focusSet(model, r).has('t:gov'));
+
+  r = applyFilters(model, POVS, TOPICS_BY_ID, { ...base, until: '2026-02-15' });
+  assert.deepEqual(ids(r, 'visible').filter((id) => id.startsWith('p:')).sort(), ['p:b', 'p:c']);
+  assert.ok(!ids(r, 'visible').includes('d:a/x.pdf'), 'a document appears with its POV, not before');
+});
+
+test('timeline: positions map to distinct dates and back', async () => {
+  const { distinctDates, makeTimeline, prettyDate } = await import(modUrl('timeline.js'));
+  const dates = distinctDates(MODEL_GRAPH.nodes);
+  assert.deepEqual(dates, ['2026-01-10', '2026-02-01', '2026-03-01']);
+  const t = makeTimeline(dates);
+  assert.equal(t.usable, true);
+  assert.equal(t.max, 2);
+  assert.equal(t.dateAt(-5), '2026-01-10');
+  assert.equal(t.dateAt(99), '2026-03-01');
+  assert.equal(t.posOf('2026-02-20'), 1);
+  assert.equal(makeTimeline(['2026-01-01']).usable, false);
+  assert.equal(makeTimeline([]).dateAt(0), null);
+  assert.equal(prettyDate('2026-01-05'), '5 Jan 2026');
+  assert.equal(prettyDate('garbage'), 'garbage');
+});
+
+test('tour: busiest topic first, a closing overview, and clamped stepping', async () => {
+  const { withIndex } = await import(modUrl('graph-data.js'));
+  const { tourSteps, stepIndex } = await import(modUrl('tour.js'));
+  const steps = tourSteps(withIndex(MODEL_GRAPH), TOPICS_BY_ID);
+  assert.deepEqual(steps.map((s) => s.title), ['Agents', 'Governance', 'The whole picture']);
+  assert.equal(steps[0].text, 'About agents.');
+  assert.equal(tourSteps(withIndex(MODEL_GRAPH), TOPICS_BY_ID, (n) => !n.sample).length, 2);
+  assert.deepEqual(tourSteps(withIndex({ nodes: [], edges: [] }), TOPICS_BY_ID), []);
+  assert.equal(stepIndex(0, -1, 3), 0);
+  assert.equal(stepIndex(2, 1, 3), 2);
+  assert.equal(stepIndex(1, 1, 3), 2);
+  assert.equal(stepIndex(0, 1, 0), 0);
+});
+
+test('labels: topics first, POV labels only when zoomed in or related, no overlaps, capped', async () => {
+  const { chooseLabels } = await import(modUrl('labels.js'));
+  const item = (i, kind, x, y, extra = {}) => ({ i, kind, x, y, r: 5, a: 1, w: 60, h: 14, weight: 3, ...extra });
+  const items = [item(0, 'topic', 100, 100), item(1, 'pov', 300, 100), item(2, 'doc', 500, 100), item(3, 'topic', 110, 104)];
+  const none = new Set();
+  let out = chooseLabels(items, { selected: -1, hover: -1, near: none, zoom: 1, showPovs: false });
+  assert.deepEqual([...out.keys()], [0], 'topic 3 overlaps topic 0, and the POV is not shown while zoomed out');
+  out = chooseLabels(items, { selected: -1, hover: -1, near: none, zoom: 2.5 });
+  assert.ok(out.has(1) && !out.has(2), 'POV label appears when zoomed in; document label never does');
+  out = chooseLabels(items, { selected: 2, hover: -1, near: none, zoom: 1 });
+  assert.ok(out.has(2), 'the selected document is labelled');
+  out = chooseLabels(items, { selected: -1, hover: -1, near: new Set([1]), zoom: 1 });
+  assert.ok(out.has(1), 'a neighbour of the selection is labelled even when zoomed out');
+  const many = Array.from({ length: 200 }, (_, i) => item(i, 'topic', (i % 20) * 90, Math.floor(i / 20) * 40));
+  assert.ok(chooseLabels(many, { selected: -1, hover: -1, near: none, zoom: 1, limit: 45 }).size <= 45);
+  assert.equal(chooseLabels([item(0, 'topic', 0, 0, { a: 0.05 })], { selected: -1, hover: -1, near: none, zoom: 1 }).size, 0, 'faded-out nodes get no label');
+});
+
+test('camera: projection, fitting, zoom toward the cursor and panning behave', async () => {
+  const cam = await import(modUrl('camera.js'));
+  const c = cam.makeCamera();
+  c.yaw = 0; c.pitch = 0; c.dist = 200;
+  const view = { width: 800, height: 600, shiftX: 0, shiftY: 0 };
+  const centre = cam.project(c, view, 0, 0, 0);
+  assert.ok(Math.abs(centre.x - 400) < 1e-6 && Math.abs(centre.y - 300) < 1e-6, 'the target is at the screen centre');
+  const right = cam.project(c, view, 50, 0, 0);
+  assert.ok(right.x > 400 && Math.abs(right.y - 300) < 1e-6);
+  const up = cam.project(c, view, 0, 50, 0);
+  assert.ok(up.y < 300, 'world up is screen up');
+  const nearer = cam.project(c, view, 0, 0, 100);
+  assert.ok(nearer.ppu > centre.ppu, 'things closer to the camera are larger');
+  const shifted = cam.project(c, { ...view, shiftX: -100 }, 0, 0, 0);
+  assert.equal(Math.round(shifted.x), 300, 'the panel offset moves the picture');
+
+  const b = cam.boundsOf([{ x: -10, y: 0, z: 0 }, { x: 30, y: 0, z: 0 }]);
+  assert.equal(b.cx, 10); assert.equal(b.radius, 20);
+  assert.ok(cam.fitDistance(100, { width: 800, height: 600 }) > cam.fitDistance(50, { width: 800, height: 600 }));
+  assert.ok(cam.fitDistance(100, { width: 800, height: 600, insetX: 300 }) > cam.fitDistance(100, { width: 800, height: 600 }), 'a panel needs more room');
+
+  // zoom keeps the point under the cursor in place
+  const z = cam.makeCamera(); z.yaw = 0.4; z.pitch = 0.2; z.dist = 250;
+  const px = 520, py = 210;
+  const bs = cam.basis(z);
+  const ppu = view.height / 2 / (z.dist * cam.TAN);
+  const wx = (px - 400) / ppu, wy = -(py - 300) / ppu;
+  const world = [z.tx + bs.right[0] * wx + bs.up[0] * wy, z.ty + bs.right[1] * wx + bs.up[1] * wy, z.tz + bs.right[2] * wx + bs.up[2] * wy];
+  const before = cam.project(z, view, ...world);
+  cam.zoomAt(z, view, 0.5, px, py);
+  const after = cam.project(z, view, ...world);
+  assert.ok(Math.abs(before.x - after.x) < 1e-6 && Math.abs(before.y - after.y) < 1e-6, 'the point under the cursor stays put');
+  assert.ok(z.dist < 250);
+  for (let i = 0; i < 200; i++) cam.zoomAt(z, view, 0.7, 400, 300);
+  assert.ok(z.dist >= z.minDist - 1e-9, 'zoom stops at the minimum distance');
+
+  const p = cam.makeCamera(); p.dist = 200;
+  for (let i = 0; i < 500; i++) cam.panBy(p, view, 80, 0);
+  assert.ok(Math.hypot(p.tx, p.ty, p.tz) <= cam.LIMIT + 1e-6, 'the target cannot wander off');
+
+  const g = cam.makeCamera();
+  cam.flyTo(g, { yaw: 3, dist: 100, tx: 10 });
+  for (let i = 0; i < 600 && cam.stepCamera(g, 0.016); i++);
+  assert.ok(g.goal === null && Math.abs(g.tx - 10) < 0.05 && Math.abs(g.dist - 100) < 0.1);
+  const r = cam.makeCamera(); r.yaw = 3.0;
+  cam.flyTo(r, { yaw: -3.0 });
+  cam.stepCamera(r, 0.1);
+  assert.ok(r.yaw > 3.0, 'yaw takes the shortest way round');
+  cam.flyTo(r, { yaw: 1, dist: 80 }, true);
+  assert.equal(r.yaw, 1); assert.equal(r.goal, null);
+});
+
+test('graph-common: hit testing prefers the closest centre, then the nearer node', async () => {
+  const { nearest, diameter, nodePixels, parseColor, introDelays } = await import(modUrl('graph-common.js'));
+  const pts = [
+    { id: 'far', x: 100, y: 100, r: 10, ok: true, depth: 400 },
+    { id: 'near', x: 104, y: 100, r: 10, ok: true, depth: 100 },
+    { id: 'off', x: 100, y: 100, r: 10, ok: false, depth: 1 },
+  ];
+  assert.equal(nearest(pts, 101, 100, 0), 'far');
+  assert.equal(nearest(pts, 103, 100, 0), 'near');
+  assert.equal(nearest(pts, 300, 300, 0), null);
+  assert.ok(diameter({ kind: 'topic', n: 5 }) > diameter({ kind: 'pov' }) && diameter({ kind: 'pov' }) > diameter({ kind: 'doc' }));
+  assert.ok(nodePixels(12, 0.01) >= 2.4 && nodePixels(12, 1000) <= 60);
+  assert.deepEqual(parseColor('#fff'), [1, 1, 1]);
+  assert.deepEqual(parseColor('rgb(255, 0, 0)'), [1, 0, 0]);
+  assert.deepEqual(parseColor('nonsense'), [0.5, 0.5, 0.5]);
+  const delays = introDelays({ nodes: [{ kind: 'topic' }, { kind: 'pov' }, { kind: 'doc' }] });
+  assert.ok(delays[0] < delays[1] && delays[1] < delays[2]);
+});
+
+// A tiny stand-in for the DOM, just enough to render blocks and compare with the build.
+function stubDoc() {
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  class Text { constructor(t) { this.t = t; } get html() { return esc(this.t); } }
+  class El {
+    constructor(tag) { this.tag = tag; this.kids = []; this.attrs = []; }
+    append(...n) { this.kids.push(...n); }
+    setAttribute(k, v) { this.attrs.push([k, v]); }
+    get html() {
+      const a = this.attrs.map(([k, v]) => ` ${k}="${esc(v)}"`).join('');
+      return `<${this.tag}${a}>${this.kids.map((k) => k.html).join('')}</${this.tag}>`;
+    }
+  }
+  return { createElement: (t) => new El(t), createTextNode: (t) => new Text(t) };
+}
+
+test('render-blocks gives the same result as the build\'s own HTML (parity)', async () => {
+  const { renderBlocks } = await import(modUrl('render-blocks.js'));
+  const { parseBlocks } = await import(pathToFileURL(join(repo, 'scripts/lib/markdown.mjs')).href);
+  const { blocksToHtml } = await import(pathToFileURL(join(repo, 'scripts/lib/pages.mjs')).href);
+  const body = [
+    'Plain **bold** and *italic* and `a<b>` and a [link](https://example.com/a?x=1&y=2).', '',
+    '## Heading two', '', '### Heading three', '',
+    '- one with **bold**', '- two', '', '1. first', '2. second', '', '> A quote & more',
+  ].join('\n');
+  const blocks = parseBlocks(body, () => assert.fail('the sample markdown should be clean'));
+  const mine = renderBlocks(stubDoc(), blocks).map((e) => e.html).join('\n');
+  // The reader sits under its own h2, so POV headings drop a level (h2 -> h3, h3 -> h4).
+  const theirs = blocksToHtml(blocks).replace(/<(\/?)h3>/g, '<$1h4>').replace(/<(\/?)h2>/g, '<$1h3>');
+  assert.equal(mine, theirs);
+  assert.match(mine, /<h3>Heading two<\/h3>/);
+  assert.match(mine, /<code>a&lt;b&gt;<\/code>/);
+  assert.match(mine, /href="https:\/\/example\.com\/a\?x=1&amp;y=2"/);
+});
+
+test('render-blocks refuses a link that is not https, and unknown nodes', async () => {
+  const { renderBlocks } = await import(modUrl('render-blocks.js'));
+  const evil = [{ t: 'p', c: [{ t: 'link', href: 'javascript:alert(1)', c: [{ t: 'text', v: 'click' }] }] }];
+  const html = renderBlocks(stubDoc(), evil).map((e) => e.html).join('');
+  assert.equal(html, '<p>click</p>');
+  assert.throws(() => renderBlocks(stubDoc(), [{ t: 'script' }]));
+  assert.throws(() => renderBlocks(stubDoc(), [{ t: 'p', c: [{ t: 'html', v: '<b>' }] }]));
+});
+
+// ------------------------------------------------- the repo-mode sample writer
+
+test('--repo mode adds samples under povs/samples/ and merges sample-only topics, never deleting', () => {
+  const root = mkdtempSync(join(tmpdir(), 'pov-repo-'));
+  made.push(root);
+  mkdirSync(join(root, 'povs'), { recursive: true });
+  writeFileSync(join(root, 'povs/topics.json'), JSON.stringify([
+    { id: 'ai-strategy', title: 'AI strategy', view: 'Real view.' },
+    { id: 'agents', title: 'Agents', view: 'Real view.', parent: 'ai-strategy' },
+    { id: 'governance', title: 'Governance and risk', view: 'Real view.', parent: 'ai-strategy' },
+    { id: 'data-foundations', title: 'Data foundations', view: 'Real view.', parent: 'ai-strategy' },
+  ]));
+  mkdirSync(join(root, 'povs/_notes'));
+  writeFileSync(join(root, 'povs/_notes/keep.txt'), 'keep me');
+  const made1 = writeSamples(root, { count: 12, seed: 5, merge: true });
+  assert.equal(made1.addedTopics, 6);
+  const topics = JSON.parse(readFileSync(join(root, 'povs/topics.json'), 'utf8'));
+  assert.equal(topics.length, 10);
+  assert.equal(topics.find((t) => t.id === 'agents').view, 'Real view.', 'existing topics are untouched');
+  assert.ok(topics.filter((t) => t.sample).length === 6 && topics.every((t) => t.sample || t.view === 'Real view.'));
+  assert.equal(readFileSync(join(root, 'povs/_notes/keep.txt'), 'utf8'), 'keep me');
+  // the result builds
+  cpSync(join(repo, 'site'), join(root, 'site'), { recursive: true });
+  const r = run(root);
+  assert.equal(r.code, 0, r.all);
+  assert.match(r.out, /12 of them samples/);
+  // and deleting povs/samples/ removes every trace of the samples
+  rmSync(join(root, 'povs/samples'), { recursive: true });
+  const r2 = run(root);
+  assert.equal(r2.code, 0, r2.all);
+  assert.match(r2.out, /0 POVs, 4 topics|0 POVs/);
+  const left = JSON.parse(readFileSync(join(root, 'dist/data/topics.json'), 'utf8'));
+  assert.deepEqual(left.map((t) => t.id), ['ai-strategy', 'agents', 'governance', 'data-foundations']);
+});
+
+test('--repo mode refuses to overwrite an existing povs/samples/', () => {
+  const root = mkdtempSync(join(tmpdir(), 'pov-repo2-'));
+  made.push(root);
+  const script = join(repo, 'scripts', 'make-samples.mjs');
+  const r = spawnSync(process.execPath, [script, '--repo', '--out', 'x'], { encoding: 'utf8' });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /either --repo or --out/);
+  if (existsSync(join(repo, 'povs/samples'))) {
+    const again = spawnSync(process.execPath, [script, '--repo'], { encoding: 'utf8' });
+    assert.equal(again.status, 1);
+    assert.match(again.stderr, /already exists/);
+  }
+});
+
+// ------------------------------------------------------------- upload batches
+
+test('package: samples split into batches under the limit, never splitting a POV folder', async () => {
+  const { planBatches, LIMIT, SAFE_BATCH } = await import(pathToFileURL(join(repo, 'scripts/package.mjs')).href);
+  const files = ['.gitignore', 'package.json', 'povs/topics.json', 'povs/example-pov/pov.md', 'site/index.html', 'povs/samples/README.md'];
+  for (let i = 1; i <= 120; i++) {
+    const n = String(i).padStart(3, '0');
+    files.push(`povs/samples/sample-${n}/pov.md`);
+    if (i % 5 === 0) files.push(`povs/samples/sample-${n}/sample-notes.txt`);
+  }
+  const { app, samples } = planBatches(files);
+  assert.ok(app.includes('povs/topics.json') && app.includes('povs/example-pov/pov.md'));
+  assert.ok(app.every((f) => !f.startsWith('povs/samples/')), 'no sample file in the app zip');
+  assert.ok(samples.length >= 2, 'a full set needs more than one batch');
+  for (const batch of samples) assert.ok(batch.length <= SAFE_BATCH && batch.length < LIMIT);
+  assert.equal(samples.flat().length, 1 + 120 + 24, 'every sample file lands in exactly one batch');
+  assert.equal(new Set(samples.flat()).size, samples.flat().length);
+  const folderBatch = new Map();
+  samples.forEach((batch, i) => { for (const f of batch) { const k = f.split('/')[2]; if (folderBatch.has(k) && folderBatch.get(k) !== i) assert.fail(`${k} was split across batches`); folderBatch.set(k, i); } });
+});
+
+test('package: with no samples there is only the app set; an oversized folder is refused', async () => {
+  const { planBatches } = await import(pathToFileURL(join(repo, 'scripts/package.mjs')).href);
+  assert.deepEqual(planBatches(['package.json', 'povs/topics.json']).samples, []);
+  const huge = Array.from({ length: 120 }, (_, i) => `povs/samples/big/file-${i}.txt`);
+  assert.throws(() => planBatches(huge), /more files than a single upload allows/);
+});
+
+test('package: the real project fits GitHub\'s upload limit in every zip', async () => {
+  const { planBatches, listFiles, LIMIT } = await import(pathToFileURL(join(repo, 'scripts/package.mjs')).href);
+  const stage = mkdtempSync(join(tmpdir(), 'pov-pkg-'));
+  made.push(stage);
+  for (const item of ['.gitignore', 'CLAUDE.md', 'CONTRIBUTING.md', 'package.json', 'povs', 'scripts', 'site']) {
+    if (existsSync(join(repo, item))) cpSync(join(repo, item), join(stage, item), { recursive: true });
+  }
+  const { app, samples } = planBatches(listFiles(stage));
+  assert.ok(app.length < LIMIT, `the app zip has ${app.length} files`);
+  for (const b of samples) assert.ok(b.length < LIMIT);
+  assert.ok(!app.some((f) => f.includes('node_modules') || f.startsWith('dist/') || f.startsWith('_samples') || f.startsWith('_package')), 'no build output or scratch folders');
+});
+
+test('package: refuses an output folder outside the project', () => {
+  const script = join(repo, 'scripts', 'package.mjs');
+  for (const bad of ['povs', '../elsewhere', '.', 'site']) {
+    const r = spawnSync(process.execPath, [script, '--out', bad], { encoding: 'utf8' });
+    assert.equal(r.status, 1, `--out ${bad} was accepted`);
+    assert.match(r.stderr, /--out must be a folder directly inside the project/);
+  }
 });
